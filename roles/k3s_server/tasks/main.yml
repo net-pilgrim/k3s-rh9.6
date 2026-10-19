@@ -30,6 +30,12 @@
     state: started
     enabled: true
 
+- name: Wait for k3s.yaml kubeconfig to be generated
+  ansible.builtin.wait_for:
+    path: /etc/rancher/k3s/k3s.yaml
+    state: present
+    timeout: 120
+
 - name: Wait for k3s API server to be responsive
   ansible.builtin.command: /usr/local/bin/kubectl get nodes
   register: kubectl_nodes

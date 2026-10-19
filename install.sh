@@ -315,17 +315,26 @@ for img_dir in . ./images /tmp/images /root/images; do
 done
 
 # Check if local k3s binary exists
-LOCAL_K3S=$(find . /tmp /root -maxdepth 2 -name "k3s" -type f -perm /111 2>/dev/null | head -n 1 || true)
+LOCAL_K3S=$(find "${SCRIPT_DIR}" . /tmp /root -maxdepth 2 -name "k3s" -type f -perm /111 2>/dev/null | head -n 1 || true)
 if [ -n "${LOCAL_K3S}" ] && [ ! -f /usr/local/bin/k3s ]; then
     log_info "Installing k3s from local binary: ${LOCAL_K3S}..."
     cp "${LOCAL_K3S}" /usr/local/bin/k3s
     chmod +x /usr/local/bin/k3s
 fi
 
+# Ensure symlinks exist if k3s binary is installed
+if [ -f /usr/local/bin/k3s ]; then
+    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
+fi
+
 # Determine SELinux flag for k3s
 K3S_SELINUX_CONFIG=""
-if rpm -q k3s-selinux >/dev/null 2>&1; then
-    K3S_SELINUX_CONFIG="selinux: true"
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    if rpm -q k3s-selinux >/dev/null 2>&1; then
+        K3S_SELINUX_CONFIG="selinux: true"
+    fi
 fi
 
 cat << EOF > /etc/rancher/k3s/config.yaml
@@ -342,37 +351,109 @@ disable:
   - servicelb
 EOF
 
-if ! command -v k3s >/dev/null 2>&1; then
+# Install or bootstrap k3s service unit if missing or if k3s.yaml not yet generated
+if [ ! -f /etc/systemd/system/k3s.service ] || [ ! -f /etc/rancher/k3s/k3s.yaml ]; then
     INSTALL_ENV="INSTALL_K3S_VERSION=${K3S_VERSION} INSTALL_K3S_SKIP_SELINUX_RPM=true"
     if [ -f /usr/local/bin/k3s ]; then
         INSTALL_ENV="${INSTALL_ENV} INSTALL_K3S_SKIP_DOWNLOAD=true"
     fi
 
     # Check for local k3s-install.sh
-    LOCAL_K3S_INSTALL=$(find . /tmp -maxdepth 2 -name "k3s-install.sh" -o -name "install-k3s.sh" 2>/dev/null | head -n 1 || true)
+    LOCAL_K3S_INSTALL=$(find "${SCRIPT_DIR}" . /tmp /root -maxdepth 2 \( -name "k3s-install.sh" -o -name "install-k3s.sh" \) 2>/dev/null | head -n 1 || true)
     if [ -n "${LOCAL_K3S_INSTALL}" ] && [ -f "${LOCAL_K3S_INSTALL}" ]; then
         log_info "Executing local k3s installer script: ${LOCAL_K3S_INSTALL}..."
         env ${INSTALL_ENV} bash "${LOCAL_K3S_INSTALL}" server
-    else
+    elif curl ${CURL_OPTS} -sf --connect-timeout 4 https://get.k3s.io >/dev/null 2>&1; then
         log_info "Fetching k3s installer from https://get.k3s.io..."
         curl ${CURL_OPTS} -sfL https://get.k3s.io | env ${INSTALL_ENV} sh -s - server
+    else
+        # Standalone systemd unit for offline setups when installer script is unavailable
+        log_info "Configuring k3s systemd unit directly..."
+        cat << 'EOF' > /etc/systemd/system/k3s.service
+[Unit]
+Description=Lightweight Kubernetes
+Documentation=https://k3s.io
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+EnvironmentFile=-/etc/default/%N
+EnvironmentFile=-/etc/sysconfig/%N
+EnvironmentFile=-/etc/rancher/k3s/k3s.service.env
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+ExecStartPre=-/sbin/modprobe br_netfilter
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/k3s server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable --now k3s
     fi
 else
-    log_info "k3s is already installed. Ensuring service is active..."
-    systemctl restart k3s
+    log_info "k3s service unit is already installed. Ensuring service is active..."
+    systemctl daemon-reload
+    systemctl restart k3s || systemctl start k3s
 fi
+
+# Ensure k3s service is active
+systemctl enable k3s >/dev/null 2>&1 || true
+systemctl start k3s >/dev/null 2>&1 || true
+
+# Explicitly wait for /etc/rancher/k3s/k3s.yaml to be created by k3s server
+log_info "Waiting for k3s cluster to initialize and generate /etc/rancher/k3s/k3s.yaml..."
+KUBECONFIG_RETRIES=60
+while [ ! -s /etc/rancher/k3s/k3s.yaml ]; do
+    if systemctl is-failed --quiet k3s 2>/dev/null; then
+        log_error "k3s service has failed to start!"
+        echo "=== systemctl status k3s ==="
+        systemctl status k3s --no-pager || true
+        echo "=== journalctl -u k3s (last 50 lines) ==="
+        journalctl -u k3s -n 50 --no-pager || true
+        exit 1
+    fi
+    sleep 2
+    KUBECONFIG_RETRIES=$((KUBECONFIG_RETRIES - 1))
+    if [ $KUBECONFIG_RETRIES -le 0 ]; then
+        log_error "Timed out waiting for /etc/rancher/k3s/k3s.yaml after 120 seconds."
+        echo "=== systemctl status k3s ==="
+        systemctl status k3s --no-pager || true
+        echo "=== journalctl -u k3s (last 50 lines) ==="
+        journalctl -u k3s -n 50 --no-pager || true
+        exit 1
+    fi
+done
+log_success "/etc/rancher/k3s/k3s.yaml generated successfully."
 
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 mkdir -p /root/.kube
-cp /etc/rancher/k3s/k3s.yaml /root/.kube/config
+cp -f /etc/rancher/k3s/k3s.yaml /root/.kube/config
+chmod 600 /root/.kube/config
+
+# Ensure symlinks for kubectl, crictl, ctr
+ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
 
 log_info "Waiting for k3s node to report Ready state..."
-RETRIES=30
+RETRIES=40
 until kubectl get nodes 2>/dev/null | grep -q "Ready"; do
     sleep 3
     RETRIES=$((RETRIES - 1))
     if [ $RETRIES -le 0 ]; then
-        log_error "Timed out waiting for k3s cluster to initialize."
+        log_error "Timed out waiting for k3s cluster node to reach Ready state."
+        echo "=== kubectl get nodes output ==="
+        kubectl get nodes || true
         exit 1
     fi
 done

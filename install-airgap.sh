@@ -119,8 +119,14 @@ mkdir -p /usr/local/bin
 if [ -f "${SCRIPT_DIR}/bin/k3s" ]; then
     cp -f "${SCRIPT_DIR}/bin/k3s" /usr/local/bin/k3s
     chmod +x /usr/local/bin/k3s
+    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
     log_success "Installed k3s binary to /usr/local/bin/k3s"
 elif command -v k3s >/dev/null 2>&1; then
+    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
     log_success "k3s binary already installed."
 else
     log_error "k3s binary not found in ./bin/k3s or /usr/local/bin/k3s!"
@@ -151,8 +157,10 @@ log_step "[7/8] Starting k3s Kubernetes Server (Offline Mode)..."
 mkdir -p /etc/rancher/k3s
 
 SELINUX_FLAG=""
-if rpm -q k3s-selinux >/dev/null 2>&1; then
-    SELINUX_FLAG="selinux: true"
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    if rpm -q k3s-selinux >/dev/null 2>&1; then
+        SELINUX_FLAG="selinux: true"
+    fi
 fi
 
 cat << EOF > /etc/rancher/k3s/config.yaml
@@ -171,7 +179,7 @@ EOF
 
 INSTALL_SCRIPT="${SCRIPT_DIR}/k3s-install.sh"
 if [ ! -f "${INSTALL_SCRIPT}" ]; then
-    INSTALL_SCRIPT=$(which install-k3s.sh 2>/dev/null || which k3s-install.sh 2>/dev/null || true)
+    INSTALL_SCRIPT=$(find "${SCRIPT_DIR}" . /tmp -maxdepth 2 \( -name "k3s-install.sh" -o -name "install-k3s.sh" \) 2>/dev/null | head -n 1 || true)
 fi
 
 if [ -n "${INSTALL_SCRIPT}" ] && [ -f "${INSTALL_SCRIPT}" ]; then
@@ -212,13 +220,52 @@ EOF
     systemctl enable --now k3s
 fi
 
+# Ensure symlinks for kubectl, crictl, ctr
+ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
+
+# Explicitly wait for /etc/rancher/k3s/k3s.yaml to be created before copying
+log_info "Waiting for k3s cluster to initialize and generate /etc/rancher/k3s/k3s.yaml..."
+KUBECONFIG_RETRIES=60
+while [ ! -s /etc/rancher/k3s/k3s.yaml ]; do
+    if systemctl is-failed --quiet k3s 2>/dev/null; then
+        log_error "k3s service has failed to start!"
+        echo "=== systemctl status k3s ==="
+        systemctl status k3s --no-pager || true
+        echo "=== journalctl -u k3s (last 50 lines) ==="
+        journalctl -u k3s -n 50 --no-pager || true
+        exit 1
+    fi
+    sleep 2
+    KUBECONFIG_RETRIES=$((KUBECONFIG_RETRIES - 1))
+    if [ $KUBECONFIG_RETRIES -le 0 ]; then
+        log_error "Timed out waiting for /etc/rancher/k3s/k3s.yaml after 120 seconds."
+        echo "=== systemctl status k3s ==="
+        systemctl status k3s --no-pager || true
+        echo "=== journalctl -u k3s (last 50 lines) ==="
+        journalctl -u k3s -n 50 --no-pager || true
+        exit 1
+    fi
+done
+log_success "/etc/rancher/k3s/k3s.yaml generated successfully."
+
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 mkdir -p /root/.kube
 cp -f /etc/rancher/k3s/k3s.yaml /root/.kube/config
+chmod 600 /root/.kube/config
 
-log_info "Waiting for k3s cluster to initialize..."
+log_info "Waiting for k3s cluster node to reach Ready state..."
+RETRIES=40
 until kubectl get nodes 2>/dev/null | grep -q "Ready"; do
     sleep 3
+    RETRIES=$((RETRIES - 1))
+    if [ $RETRIES -le 0 ]; then
+        log_error "Timed out waiting for k3s cluster node to reach Ready state."
+        echo "=== kubectl get nodes output ==="
+        kubectl get nodes || true
+        exit 1
+    fi
 done
 log_success "k3s cluster is Ready."
 
