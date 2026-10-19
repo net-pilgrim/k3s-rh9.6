@@ -87,6 +87,13 @@ If your target machine has no direct internet egress or blocked external reposit
    sudo ./deploy-workloads.sh
    ```
 
+### 🚀 One-Liner Workload Installer (Existing Cluster)
+If you already have k3s running and just want to deploy or redeploy the workloads:
+```bash
+curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/deploy-workloads.sh | sudo bash
+```
+*(Or via Gist: `curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgrim/29dfd0b6dfb41c8c3f32384c3a723e67/raw/deploy-workloads.sh | sudo bash`)*
+
 ### 🌐 Behind a Corporate Proxy?
 If your server requires an HTTP/HTTPS proxy to reach the outside world:
 ```bash
