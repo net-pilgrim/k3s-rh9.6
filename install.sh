@@ -791,7 +791,7 @@ helm repo add makeplane https://helm.plane.so --force-update >/dev/null 2>&1 || 
 helm repo update >/dev/null 2>&1
 
 cat << EOF > "${TMP_DIR}/values-plane.yaml"
-planeVersion: "v2.6.3"
+planeVersion: "v1.4.2"
 env:
   storageClass: "local-path"
   secretKey: "${PLANE_SECRET_KEY}"

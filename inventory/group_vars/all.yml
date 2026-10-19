@@ -67,7 +67,7 @@ forgejo_runner_token: ""
 # Plane (plane.so) Configuration
 # ==============================================================================
 plane_namespace: "plane"
-plane_version: "v2.6.3"
+plane_version: "v1.4.2"
 plane_db_user: "plane"
 plane_db_password: "PlanePostgresPassword123!"
 plane_db_name: "plane"

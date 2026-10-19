@@ -1,5 +1,5 @@
 # Plane Community Edition Helm Values (makeplane/plane-ce)
-planeVersion: "v2.6.3"
+planeVersion: "v1.4.2"
 
 env:
   storageClass: "local-path"

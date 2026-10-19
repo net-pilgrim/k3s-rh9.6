@@ -177,15 +177,11 @@ IMAGES = [
     "curlimages/curl:latest",
 
     # --- Plane Community Edition (plane.so) ---
-    "artifacts.plane.so/makeplane/plane-frontend:v2.6.3",
-    "artifacts.plane.so/makeplane/plane-space:v2.6.3",
-    "artifacts.plane.so/makeplane/plane-admin:v2.6.3",
-    "artifacts.plane.so/makeplane/plane-live:v2.6.3",
-    "artifacts.plane.so/makeplane/plane-backend:v2.6.3",
-    "makeplane/plane-frontend:v2.6.3",
-    "makeplane/plane-space:v2.6.3",
-    "makeplane/plane-admin:v2.6.3",
-    "makeplane/plane-backend:v2.6.3",
+    "makeplane/plane-backend:v1.4.2",
+    "makeplane/plane-frontend:v1.4.2",
+    "makeplane/plane-admin:v1.4.2",
+    "makeplane/plane-space:v1.4.2",
+    "makeplane/plane-live:v1.4.2",
     "valkey/valkey:7.2.11-alpine",
     "postgres:15.7-alpine",
     "rabbitmq:3.13.6-management-alpine",
@@ -212,6 +208,10 @@ def get_tag_aliases(image_name):
             aliases.add(short[len("library/"):])
     elif image_name.startswith("artifacts.plane.so/"):
         aliases.add(image_name[len("artifacts.plane.so/"):])
+
+    if image_name.startswith("makeplane/") or image_name.startswith("docker.io/makeplane/"):
+        plain = image_name[len("docker.io/"):] if image_name.startswith("docker.io/") else image_name
+        aliases.add(f"artifacts.plane.so/{plain}")
 
     extra = set()
     for a in aliases:
@@ -267,6 +267,12 @@ def get_auth_token(reg, repo):
             return None
         token_url = f"{realm}?service={service}&scope=repository:{repo}:pull"
         req2 = urllib.request.Request(token_url)
+        docker_user = os.environ.get("DOCKER_USER")
+        docker_pass = os.environ.get("DOCKER_PASS") or os.environ.get("DOCKER_TOKEN")
+        if docker_user and docker_pass and "docker.io" in realm:
+            import base64
+            b64_auth = base64.b64encode(f"{docker_user}:{docker_pass}".encode()).decode("ascii")
+            req2.add_header("Authorization", f"Basic {b64_auth}")
         try:
             with urllib.request.urlopen(req2, context=TLS_CTX, timeout=15) as r:
                 data = json.loads(r.read())

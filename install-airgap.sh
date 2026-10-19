@@ -419,7 +419,7 @@ log_info "Installing Plane Management Suite..."
 PLANE_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "plane-ce-*.tgz" 2>/dev/null | head -n 1 || true)
 
 cat << EOF > "${TMP_DIR}/values-plane.yaml"
-planeVersion: "v2.6.3"
+planeVersion: "v1.4.2"
 env:
   storageClass: "local-path"
   secretKey: "plane-secure-key-${RANDOM}${RANDOM}"
