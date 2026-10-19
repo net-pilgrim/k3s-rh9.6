@@ -320,26 +320,19 @@ if [ -n "${LOCAL_K3S}" ] && [ ! -f /usr/local/bin/k3s ]; then
     log_info "Installing k3s from local binary: ${LOCAL_K3S}..."
     cp "${LOCAL_K3S}" /usr/local/bin/k3s
     chmod +x /usr/local/bin/k3s
+    restorecon -v /usr/local/bin/k3s 2>/dev/null || true
 fi
 
 # Ensure symlinks exist if k3s binary is installed
 if [ -f /usr/local/bin/k3s ]; then
+    restorecon -v /usr/local/bin/k3s 2>/dev/null || true
     ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
     ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
     ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
 fi
 
-# Determine SELinux flag for k3s
-K3S_SELINUX_CONFIG=""
-if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
-    if rpm -q k3s-selinux >/dev/null 2>&1; then
-        K3S_SELINUX_CONFIG="selinux: true"
-    fi
-fi
-
 cat << EOF > /etc/rancher/k3s/config.yaml
 write-kubeconfig-mode: "0644"
-${K3S_SELINUX_CONFIG}
 tls-san:
   - "${PUBLIC_IP}"
   - "${DOMAIN}"

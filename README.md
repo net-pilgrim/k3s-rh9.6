@@ -110,6 +110,7 @@ curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgri
 ```
 pipeline/
 ├── deploy-workloads.sh                  # 🚀 Standalone workload installer (Forgejo, Runner, Plane, It's a Plan)
+├── repair-k3s.sh                        # 🩺 Diagnostic and self-healing repair tool for k3s.service
 ├── install.sh                           # ⚡ Autonomous 1-step installer (curl | bash)
 ├── install-airgap.sh                    # 🔒 Standalone offline installer for air-gapped systems
 ├── package.sh                           # 📦 Offline bundle generator (RPMs, bins, images, manifests)

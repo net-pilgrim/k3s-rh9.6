@@ -119,11 +119,13 @@ mkdir -p /usr/local/bin
 if [ -f "${SCRIPT_DIR}/bin/k3s" ]; then
     cp -f "${SCRIPT_DIR}/bin/k3s" /usr/local/bin/k3s
     chmod +x /usr/local/bin/k3s
+    restorecon -v /usr/local/bin/k3s 2>/dev/null || true
     ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
     ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
     ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
     log_success "Installed k3s binary to /usr/local/bin/k3s"
 elif command -v k3s >/dev/null 2>&1; then
+    restorecon -v /usr/local/bin/k3s 2>/dev/null || true
     ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
     ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
     ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
@@ -136,6 +138,7 @@ fi
 if [ -f "${SCRIPT_DIR}/bin/helm" ]; then
     cp -f "${SCRIPT_DIR}/bin/helm" /usr/local/bin/helm
     chmod +x /usr/local/bin/helm
+    restorecon -v /usr/local/bin/helm 2>/dev/null || true
     log_success "Installed Helm binary to /usr/local/bin/helm"
 fi
 
@@ -156,16 +159,8 @@ fi
 log_step "[7/8] Starting k3s Kubernetes Server (Offline Mode)..."
 mkdir -p /etc/rancher/k3s
 
-SELINUX_FLAG=""
-if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
-    if rpm -q k3s-selinux >/dev/null 2>&1; then
-        SELINUX_FLAG="selinux: true"
-    fi
-fi
-
 cat << EOF > /etc/rancher/k3s/config.yaml
 write-kubeconfig-mode: "0644"
-${SELINUX_FLAG}
 tls-san:
   - "${PUBLIC_IP}"
   - "${DOMAIN}"
@@ -176,6 +171,8 @@ tls-san:
 disable:
   - servicelb
 EOF
+
+restorecon -R -v /etc/rancher /var/lib/rancher 2>/dev/null || true
 
 INSTALL_SCRIPT="${SCRIPT_DIR}/k3s-install.sh"
 if [ ! -f "${INSTALL_SCRIPT}" ]; then

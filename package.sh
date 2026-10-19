@@ -201,6 +201,8 @@ cp "${SCRIPT_DIR}/install-airgap.sh" "${STAGING_DIR}/install.sh"
 chmod +x "${STAGING_DIR}/install.sh"
 cp "${SCRIPT_DIR}/deploy-workloads.sh" "${STAGING_DIR}/deploy-workloads.sh"
 chmod +x "${STAGING_DIR}/deploy-workloads.sh"
+cp "${SCRIPT_DIR}/repair-k3s.sh" "${STAGING_DIR}/repair-k3s.sh"
+chmod +x "${STAGING_DIR}/repair-k3s.sh"
 cp -r "${SCRIPT_DIR}/manifests"/* "${STAGING_DIR}/manifests/"
 
 cat << 'EOF' > "${STAGING_DIR}/README.md"
