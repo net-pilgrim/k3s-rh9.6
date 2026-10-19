@@ -105,7 +105,7 @@ for tarfile in "${TAR_FILES[@]}"; do
     cp -n "${tarfile}" /var/lib/rancher/k3s/agent/images/ 2>/dev/null || true
 
     # 2. Directly import into the running containerd daemon via k3s ctr
-    if "${K3S_BIN}" ctr images import "${tarfile}" >/dev/null 2>&1; then
+    if "${K3S_BIN}" ctr -n k8s.io images import "${tarfile}" >/dev/null 2>&1; then
         echo -e "${GREEN}DONE${NC}"
     else
         echo -e "${YELLOW}IMPORTED (or already cached)${NC}"
