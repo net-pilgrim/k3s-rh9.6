@@ -49,7 +49,7 @@ If you do not have a domain configured yet, simply run (using `--tlsv1.2 --tls-m
 ```bash
 curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/install.sh | sudo bash
 ```
-*(Or via Gist: `curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | sudo bash`)*
+*(Or via Gist: `curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgrim/4b875e03b42a29611b1215a0e8ca551b/raw/install.sh | sudo bash`)*
 
 > [!TIP]
 > The script auto-detects your server's public IP and binds all services to `<PUBLIC_IP>.nip.io` (e.g. `git.<PUBLIC_IP>.nip.io`, `plane.<PUBLIC_IP>.nip.io`, `itsaplan.<PUBLIC_IP>.nip.io`) with working HTTPS immediately.
@@ -91,7 +91,7 @@ If your server requires an HTTP/HTTPS proxy to reach the outside world:
 export http_proxy="http://proxy.corp.internal:8080"
 export https_proxy="http://proxy.corp.internal:8080"
 export no_proxy="localhost,127.0.0.1,10.42.0.0/16,10.43.0.0/16,cluster.local"
-curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash
+curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgrim/4b875e03b42a29611b1215a0e8ca551b/raw/install.sh | bash
 ```
 
 ---
