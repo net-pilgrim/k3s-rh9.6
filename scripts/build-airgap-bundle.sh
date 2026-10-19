@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-K3S_VERSION="${K3S_VERSION:-v1.31.5+k3s1}"
+K3S_VERSION="${K3S_VERSION:-v1.37.1+k3s1}"
 K3S_VERSION_URL=$(echo "${K3S_VERSION}" | sed 's/+/%2B/g')
 HELM_VERSION="${HELM_VERSION:-v3.17.1}"
 SELINUX_RPM_URL="https://github.com/k3s-io/k3s-selinux/releases/download/v1.6.latest.1/k3s-selinux-1.6-1.el9.noarch.rpm"

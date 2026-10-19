@@ -29,7 +29,7 @@ log_warn() { echo -e "${YELLOW}   ⚠ ${NC}$1"; }
 log_error() { echo -e "${RED}   ✖ ERROR: ${NC}$1" >&2; }
 
 # Default versions and paths
-K3S_VERSION="${K3S_VERSION:-v1.31.5+k3s1}"
+K3S_VERSION="${K3S_VERSION:-v1.37.1+k3s1}"
 K3S_VERSION_URL=$(echo "${K3S_VERSION}" | sed 's/+/%2B/g')
 HELM_VERSION="${HELM_VERSION:-v3.17.1}"
 SELINUX_RPM_URL="https://github.com/k3s-io/k3s-selinux/releases/download/v1.6.latest.1/k3s-selinux-1.6-1.el9.noarch.rpm"
@@ -53,7 +53,7 @@ Usage: ./package.sh [OPTIONS]
 Options:
   -o, --output <FILE>          Target archive filename (default: ./k3s-rh9.6-offline-bundle.tar.gz)
   -w, --include-workloads      Download and bundle all container images for Forgejo, Runner, DinD, Plane, It's a Plan
-  -v, --k3s-version <VERSION>  k3s release version (default: v1.31.5+k3s1)
+  -v, --k3s-version <VERSION>  k3s release version (default: v1.37.1+k3s1)
   -h, --help                   Show this help message and exit
 EOF
             exit 0

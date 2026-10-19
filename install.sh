@@ -50,7 +50,7 @@ DOMAIN="${DOMAIN:-}"
 TLS_MODE="${TLS_MODE:-${TLS:-}}"
 ACME_EMAIL="${ACME_EMAIL:-${EMAIL:-}}"
 ADMIN_PASS="${ADMIN_PASS:-${ADMIN_PASSWORD:-}}"
-K3S_VERSION="${K3S_VERSION:-v1.31.5+k3s1}"
+K3S_VERSION="${K3S_VERSION:-v1.37.1+k3s1}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -73,7 +73,7 @@ Options:
   -t, --tls <MODE>            TLS mode: 'selfsigned', 'letsencrypt', 'staging' (default: selfsigned for nip.io, letsencrypt for custom domains)
   -e, --email <EMAIL>         ACME contact email for Let's Encrypt (default: admin@<DOMAIN>)
   -p, --admin-pass <PASSWORD> Master administrator password (default: securely generated)
-  -v, --k3s-version <VERSION> k3s version (default: v1.31.5+k3s1)
+  -v, --k3s-version <VERSION> k3s version (default: v1.37.1+k3s1)
   -h, --help                  Show this help message and exit
 
 Environment variables can also be used:

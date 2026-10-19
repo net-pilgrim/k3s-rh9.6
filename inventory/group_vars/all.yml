@@ -24,7 +24,7 @@ local_kubeconfig_path: "{{ lookup('env', 'HOME') }}/.kube/k3s-pipeline.yaml"
 # ==============================================================================
 # k3s Distribution Configuration
 # ==============================================================================
-k3s_version: "v1.31.5+k3s1"
+k3s_version: "v1.37.1+k3s1"
 k3s_cluster_token: "k3s-secure-token-pipeline-cluster-secret"
 k3s_server_args:
   - "--write-kubeconfig-mode=644"
