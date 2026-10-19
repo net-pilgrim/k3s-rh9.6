@@ -12,6 +12,7 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: itsaplan-secrets
@@ -27,6 +28,7 @@ spec:
       containers:
         - name: migrate
           image: ghcr.io/croffasia/itsaplan-api:latest
+          imagePullPolicy: IfNotPresent
           command: ["bun", "run", "packages/db/src/migrate.ts"]
           envFrom:
             - secretRef:

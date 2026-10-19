@@ -18,6 +18,7 @@ spec:
       containers:
         - name: web
           image: ghcr.io/croffasia/itsaplan-web:latest
+          imagePullPolicy: IfNotPresent
           env:
             - name: NODE_ENV
               value: "production"

@@ -18,6 +18,7 @@ spec:
       initContainers:
         - name: wait-for-migrations
           image: busybox:latest
+          imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
             - -c
@@ -29,6 +30,7 @@ spec:
       containers:
         - name: api
           image: ghcr.io/croffasia/itsaplan-api:latest
+          imagePullPolicy: IfNotPresent
           command: ["bun", "run", "apps/api/src/index.ts"]
           env:
             - name: NODE_ENV

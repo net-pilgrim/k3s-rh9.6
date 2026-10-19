@@ -123,6 +123,13 @@ done
 if [ -n "${PYTHON_BIN}" ]; then
     log_info "Executing Python TLS 1.2 download engine (${PYTHON_BIN})..."
     "${PYTHON_BIN}" - "${OUTPUT_DIR}" << 'PYEOF'
+#!/usr/bin/env python3
+"""
+High-Performance OCI/Docker Container Image Downloader with Strict TLS 1.2
+Enforces TLS 1.2 to bypass enterprise middleboxes that drop TLS 1.3 packets.
+Uses standard library only (no external dependencies, no Docker daemon required).
+"""
+
 import sys
 import os
 import json
@@ -131,8 +138,10 @@ import tarfile
 import tempfile
 import urllib.request
 import urllib.error
+import urllib.parse
 import shutil
 
+# Enforce TLS 1.2 strictly
 TLS_CTX = ssl.create_default_context()
 if hasattr(ssl, "TLSVersion"):
     TLS_CTX.maximum_version = ssl.TLSVersion.TLSv1_2
@@ -141,13 +150,14 @@ else:
     TLS_CTX.options |= ssl.OP_NO_TLSv1_3
 
 IMAGES = [
-    # Cert-Manager v1.17
+    # --- Cert-Manager v1.17 ---
     "quay.io/jetstack/cert-manager-controller:v1.17.1",
     "quay.io/jetstack/cert-manager-cainjector:v1.17.1",
     "quay.io/jetstack/cert-manager-webhook:v1.17.1",
     "quay.io/jetstack/cert-manager-startupapicheck:v1.17.1",
 
-    # Forgejo & Runner
+    # --- Forgejo Git Server & CI/CD Runner ---
+    "code.forgejo.org/forgejo/forgejo:15.0.10-rootless",
     "code.forgejo.org/forgejo/forgejo:15.0.10",
     "code.forgejo.org/forgejo/forgejo:10.0.1",
     "code.forgejo.org/forgejo/runner:4.0.1",
@@ -157,7 +167,7 @@ IMAGES = [
     "alpine:latest",
     "busybox:latest",
 
-    # It's a Plan
+    # --- It's a Plan (itsaplan.dev) ---
     "ghcr.io/croffasia/itsaplan-api:latest",
     "ghcr.io/croffasia/itsaplan-web:latest",
     "ghcr.io/croffasia/itsaplan-worker:latest",
@@ -166,7 +176,7 @@ IMAGES = [
     "rustfs/rustfs:1.0.0",
     "curlimages/curl:latest",
 
-    # Plane Community Edition
+    # --- Plane Community Edition (plane.so) ---
     "artifacts.plane.so/makeplane/plane-frontend:v2.6.3",
     "artifacts.plane.so/makeplane/plane-space:v2.6.3",
     "artifacts.plane.so/makeplane/plane-admin:v2.6.3",
@@ -180,14 +190,44 @@ IMAGES = [
     "postgres:15.7-alpine",
     "rabbitmq:3.13.6-management-alpine",
     "docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z",
+    "docker.io/pgsty/mc:RELEASE.2026-09-16T00-00-00Z",
     "redis:7-alpine",
     "rabbitmq:3-management-alpine",
     "minio/minio:RELEASE.2023-09-07T02-17-04Z"
 ]
 
+def get_tag_aliases(image_name):
+    aliases = {image_name}
+    if not image_name.startswith("docker.io/") and ("/" not in image_name or (image_name.count("/") == 1 and "." not in image_name.split("/")[0])):
+        aliases.add(f"docker.io/{image_name}")
+        if "/" not in image_name:
+            aliases.add(f"docker.io/library/{image_name}")
+            aliases.add(f"library/{image_name}")
+        elif image_name.startswith("library/"):
+            aliases.add(image_name[len("library/"):])
+    elif image_name.startswith("docker.io/"):
+        short = image_name[len("docker.io/"):]
+        aliases.add(short)
+        if short.startswith("library/"):
+            aliases.add(short[len("library/"):])
+    elif image_name.startswith("artifacts.plane.so/"):
+        aliases.add(image_name[len("artifacts.plane.so/"):])
+
+    extra = set()
+    for a in aliases:
+        if a.endswith(":latest"):
+            extra.add(a[:-7])
+        elif ":" not in a.split("/")[-1]:
+            extra.add(f"{a}:latest")
+    aliases.update(extra)
+
+    return sorted(list(aliases))
+
 def parse_image(name):
+    # Normalize docker.io
     if name.startswith("docker.io/"):
         name = name[len("docker.io/"):]
+    
     parts = name.split('/')
     if len(parts) == 1:
         img_part = parts[0]
@@ -210,7 +250,7 @@ def get_auth_token(reg, repo):
     url = f"https://{reg}/v2/"
     req = urllib.request.Request(url)
     try:
-        urllib.request.urlopen(req, context=TLS_CTX, timeout=12)
+        urllib.request.urlopen(req, context=TLS_CTX, timeout=10)
         return None
     except urllib.error.HTTPError as e:
         auth_hdr = e.headers.get('Www-Authenticate')
@@ -232,18 +272,18 @@ def get_auth_token(reg, repo):
                 data = json.loads(r.read())
                 return data.get('token') or data.get('access_token')
         except Exception as te:
-            print(f"      [!] Token error ({realm}): {te}")
+            print(f"      [!] Token error from {realm}: {te}")
             return None
     except Exception as ge:
-        print(f"      [!] Registry ping failed ({reg}): {ge}")
+        print(f"      [!] Registry ping failed for {reg}: {ge}")
         return None
 
 def download_stream(url, headers, target_file):
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, context=TLS_CTX, timeout=90) as r:
+    with urllib.request.urlopen(req, context=TLS_CTX, timeout=60) as r:
         with open(target_file, 'wb') as f:
             while True:
-                chunk = r.read(1024 * 1024)
+                chunk = r.read(1024 * 1024)  # 1MB chunks
                 if not chunk:
                     break
                 f.write(chunk)
@@ -264,9 +304,10 @@ def download_image(image_name, out_tar):
 
     url = f"https://{reg}/v2/{repo}/manifests/{tag}"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, context=TLS_CTX, timeout=25) as r:
+    with urllib.request.urlopen(req, context=TLS_CTX, timeout=20) as r:
         manifest = json.loads(r.read().decode('utf-8'))
 
+    # If manifest list / OCI index, select amd64 linux
     if 'manifests' in manifest:
         chosen_digest = None
         for m in manifest['manifests']:
@@ -278,17 +319,19 @@ def download_image(image_name, out_tar):
             chosen_digest = manifest['manifests'][0]['digest']
         url = f"https://{reg}/v2/{repo}/manifests/{chosen_digest}"
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=TLS_CTX, timeout=25) as r:
+        with urllib.request.urlopen(req, context=TLS_CTX, timeout=20) as r:
             manifest = json.loads(r.read().decode('utf-8'))
 
     config_digest = manifest['config']['digest']
     work_dir = tempfile.mkdtemp(prefix="img-build-")
 
     try:
+        # Download config JSON
         config_path = os.path.join(work_dir, config_digest)
         config_url = f"https://{reg}/v2/{repo}/blobs/{config_digest}"
         download_stream(config_url, headers, config_path)
 
+        # Download layers
         layer_files = []
         layers = manifest.get('layers', [])
         for i, l in enumerate(layers):
@@ -299,15 +342,17 @@ def download_image(image_name, out_tar):
             download_stream(layer_url, headers, layer_path)
             layer_files.append((layer_fname, layer_path))
 
+        # Write manifest.json
         manifest_data = [{
             'Config': config_digest,
-            'RepoTags': [image_name],
+            'RepoTags': get_tag_aliases(image_name),
             'Layers': [fname for fname, _ in layer_files]
         }]
         manifest_path = os.path.join(work_dir, "manifest.json")
         with open(manifest_path, 'w') as mf:
             json.dump(manifest_data, mf)
 
+        # Build final tar
         tmp_tar = out_tar + ".part"
         with tarfile.open(tmp_tar, 'w') as t:
             t.add(config_path, arcname=config_digest)
@@ -319,35 +364,45 @@ def download_image(image_name, out_tar):
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
-target_dir = sys.argv[1] if len(sys.argv) > 1 else "./workload-images"
-os.makedirs(target_dir, exist_ok=True)
+def main():
+    target_dir = sys.argv[1] if len(sys.argv) > 1 else "./workload-images"
+    os.makedirs(target_dir, exist_ok=True)
 
-success = 0
-failed = 0
+    print(f"\n==> Fetching {len(IMAGES)} workload images (Strict TLS 1.2 Engine)...")
+    print(f"==> Target Directory: {os.path.abspath(target_dir)}\n")
 
-for idx, img in enumerate(IMAGES, 1):
-    safe_name = img.replace('/', '_').replace(':', '_') + ".tar"
-    out_tar = os.path.join(target_dir, safe_name)
+    success_count = 0
+    fail_count = 0
 
-    if os.path.isfile(out_tar) and os.path.getsize(out_tar) > 1024:
-        size_mb = os.path.getsize(out_tar) / (1024 * 1024)
-        print(f"[{idx}/{len(IMAGES)}] ✔ Cached: {img} ({size_mb:.1f} MB)")
-        success += 1
-        continue
+    for idx, img in enumerate(IMAGES, 1):
+        safe_name = img.replace('/', '_').replace(':', '_') + ".tar"
+        out_tar = os.path.join(target_dir, safe_name)
 
-    print(f"[{idx}/{len(IMAGES)}] Downloading: {img} ...", flush=True)
-    try:
-        download_image(img, out_tar)
-        size_mb = os.path.getsize(out_tar) / (1024 * 1024)
-        print(f"       ✔ SUCCESS ({size_mb:.1f} MB)")
-        success += 1
-    except Exception as e:
-        print(f"       ✖ FAILED: {e}")
-        failed += 1
-        if os.path.exists(out_tar + ".part"):
-            os.remove(out_tar + ".part")
+        if os.path.isfile(out_tar) and os.path.getsize(out_tar) > 1024:
+            size_mb = os.path.getsize(out_tar) / (1024 * 1024)
+            print(f"[{idx}/{len(IMAGES)}] ✔ Cached: {img} ({size_mb:.1f} MB)")
+            success_count += 1
+            continue
 
-print(f"\nDownload Results: {success} succeeded, {failed} failed.")
+        print(f"[{idx}/{len(IMAGES)}] Downloading: {img} ...", flush=True)
+        try:
+            download_image(img, out_tar)
+            size_mb = os.path.getsize(out_tar) / (1024 * 1024)
+            print(f"       ✔ SUCCESS ({size_mb:.1f} MB)")
+            success_count += 1
+        except Exception as e:
+            print(f"       ✖ FAILED: {e}")
+            fail_count += 1
+            if os.path.exists(out_tar + ".part"):
+                os.remove(out_tar + ".part")
+
+    print(f"\n==> Download Summary: {success_count} succeeded, {fail_count} failed.\n")
+    if fail_count > 0 and success_count == 0:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+
 PYEOF
 else
     log_error "Python 3 is required for the TLS 1.2 download engine but was not found!"

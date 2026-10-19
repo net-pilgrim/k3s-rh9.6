@@ -17,6 +17,7 @@ spec:
       containers:
         - name: postgres
           image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: itsaplan-secrets

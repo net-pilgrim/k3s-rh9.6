@@ -18,6 +18,7 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/croffasia/itsaplan-worker:latest
+          imagePullPolicy: IfNotPresent
           env:
             - name: NODE_ENV
               value: "production"

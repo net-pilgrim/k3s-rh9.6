@@ -32,6 +32,7 @@ IMAGES = [
     "quay.io/jetstack/cert-manager-startupapicheck:v1.17.1",
 
     # --- Forgejo Git Server & CI/CD Runner ---
+    "code.forgejo.org/forgejo/forgejo:15.0.10-rootless",
     "code.forgejo.org/forgejo/forgejo:15.0.10",
     "code.forgejo.org/forgejo/forgejo:10.0.1",
     "code.forgejo.org/forgejo/runner:4.0.1",
@@ -64,10 +65,38 @@ IMAGES = [
     "postgres:15.7-alpine",
     "rabbitmq:3.13.6-management-alpine",
     "docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z",
+    "docker.io/pgsty/mc:RELEASE.2026-09-16T00-00-00Z",
     "redis:7-alpine",
     "rabbitmq:3-management-alpine",
     "minio/minio:RELEASE.2023-09-07T02-17-04Z"
 ]
+
+def get_tag_aliases(image_name):
+    aliases = {image_name}
+    if not image_name.startswith("docker.io/") and ("/" not in image_name or (image_name.count("/") == 1 and "." not in image_name.split("/")[0])):
+        aliases.add(f"docker.io/{image_name}")
+        if "/" not in image_name:
+            aliases.add(f"docker.io/library/{image_name}")
+            aliases.add(f"library/{image_name}")
+        elif image_name.startswith("library/"):
+            aliases.add(image_name[len("library/"):])
+    elif image_name.startswith("docker.io/"):
+        short = image_name[len("docker.io/"):]
+        aliases.add(short)
+        if short.startswith("library/"):
+            aliases.add(short[len("library/"):])
+    elif image_name.startswith("artifacts.plane.so/"):
+        aliases.add(image_name[len("artifacts.plane.so/"):])
+
+    extra = set()
+    for a in aliases:
+        if a.endswith(":latest"):
+            extra.add(a[:-7])
+        elif ":" not in a.split("/")[-1]:
+            extra.add(f"{a}:latest")
+    aliases.update(extra)
+
+    return sorted(list(aliases))
 
 def parse_image(name):
     # Normalize docker.io
@@ -191,7 +220,7 @@ def download_image(image_name, out_tar):
         # Write manifest.json
         manifest_data = [{
             'Config': config_digest,
-            'RepoTags': [image_name],
+            'RepoTags': get_tag_aliases(image_name),
             'Layers': [fname for fname, _ in layer_files]
         }]
         manifest_path = os.path.join(work_dir, "manifest.json")

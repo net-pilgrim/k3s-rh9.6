@@ -17,6 +17,7 @@ spec:
       containers:
         - name: rustfs
           image: rustfs/rustfs:1.0.0
+          imagePullPolicy: IfNotPresent
           env:
             - name: RUSTFS_ACCESS_KEY
               valueFrom:
@@ -82,6 +83,7 @@ spec:
       containers:
         - name: bucket-init
           image: curlimages/curl:latest
+          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: itsaplan-secrets

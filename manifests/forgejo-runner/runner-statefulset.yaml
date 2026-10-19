@@ -20,6 +20,7 @@ spec:
         # Docker-in-Docker sidecar for executing container actions
         - name: dind
           image: docker:27-dind
+          imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
           env:
@@ -34,6 +35,7 @@ spec:
         # Forgejo Runner daemon container
         - name: runner
           image: code.forgejo.org/forgejo/runner:4.0.1
+          imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
             - -c

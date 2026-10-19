@@ -132,8 +132,11 @@ fi
 
 if command -v kubectl >/dev/null 2>&1; then
     for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
+        # Clean up any failed jobs in namespace so they can be recreated
+        kubectl delete job -n "$ns" --field-selector status.successful=0 2>/dev/null || true
+
         # Delete pods that are stuck in ErrImagePull or ImagePullBackOff so they re-schedule immediately
-        FAILED_PODS=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -E "(ImagePullBackOff|ErrImagePull)" | awk '{print $1}' || true)
+        FAILED_PODS=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -E "(ImagePullBackOff|ErrImagePull|Init:ImagePullBackOff|Init:ErrImagePull)" | awk '{print $1}' || true)
         if [ -n "${FAILED_PODS}" ]; then
             log_info "Restarting stuck pods in namespace '${ns}': ${FAILED_PODS}"
             echo "${FAILED_PODS}" | xargs kubectl delete pod -n "$ns" --grace-period=0 --force >/dev/null 2>&1 || true
