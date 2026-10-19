@@ -139,20 +139,9 @@ for tool in kubectl crictl ctr; do
     ln -sf /usr/local/bin/k3s "/usr/bin/${tool}"
 done
 
-# Create k3s-server and k3s-agent helper wrappers
-cat << 'EOF' > /usr/local/bin/k3s-server
-#!/bin/sh
-exec /usr/bin/k3s server "$@"
-EOF
-chmod +x /usr/local/bin/k3s-server
-ln -sf /usr/local/bin/k3s-server /usr/bin/k3s-server
-
-cat << 'EOF' > /usr/local/bin/k3s-agent
-#!/bin/sh
-exec /usr/bin/k3s agent "$@"
-EOF
-chmod +x /usr/local/bin/k3s-agent
-ln -sf /usr/local/bin/k3s-agent /usr/bin/k3s-agent
+# Ensure rogue wrapper scripts that cause recursion loops are removed
+rm -f /usr/local/bin/k3s-server /usr/bin/k3s-server /usr/local/bin/k3s-agent /usr/bin/k3s-agent
+rm -f /etc/systemd/system/k3s-server.service
 
 # Set up global profile for PATH and KUBECONFIG
 cat << 'EOF' > /etc/profile.d/k3s.sh

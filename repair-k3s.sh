@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # k3s Service Diagnostic & Self-Healing Repair Tool
-# Diagnoses why k3s.service failed and automatically applies targeted fixes
-# for RHEL 9.6 / Rocky 9 / AlmaLinux 9 / CentOS environments.
+# Fixes "k3s-server argument list too long" recursion loop, wipes corrupted
+# self-extraction data cache, and restores k3s.service on RHEL 9.6.
 #
 # Usage:
 #   sudo ./repair-k3s.sh
@@ -21,6 +21,11 @@ echo -e "\n${BLUE}${BOLD}=======================================================
 echo -e "${BLUE}${BOLD}            🩺 k3s Diagnostic & Self-Healing Repair Tool${NC}"
 echo -e "${BLUE}${BOLD}==============================================================================${NC}\n"
 
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    echo -e "${RED}✖ ERROR: This script must be run as root (e.g. sudo ./repair-k3s.sh)${NC}" >&2
+    exit 1
+fi
+
 # ------------------------------------------------------------------------------
 # 1. System & Architecture Diagnostics
 # ------------------------------------------------------------------------------
@@ -38,6 +43,13 @@ if command -v getenforce >/dev/null 2>&1; then
 fi
 echo " - SELinux Status:     ${SELINUX_STATUS}"
 
+# Check for noexec mount on /var or /var/lib
+if mount | grep -E '\s(/var|/var/lib)\s.*noexec' >/dev/null 2>&1; then
+    echo -e "${YELLOW} - /var mount flag:    WARNING: mounted with 'noexec'!${NC}"
+else
+    echo " - /var mount flag:    exec allowed"
+fi
+
 # Check k3s binary
 if [ -f /usr/local/bin/k3s ]; then
     echo " - Binary exists:      /usr/local/bin/k3s ($(du -h /usr/local/bin/k3s | awk '{print $1}'))"
@@ -51,60 +63,72 @@ else
     echo -e "${RED} - /usr/local/bin/k3s is MISSING!${NC}"
 fi
 
-# ------------------------------------------------------------------------------
-# 2. Inspect Failure Logs
-# ------------------------------------------------------------------------------
-echo -e "\n${CYAN}${BOLD}[2/5] Inspecting Recent k3s Journal Logs...${NC}"
-echo "------------------------------------------------------------------------------"
-journalctl -u k3s -n 35 --no-pager || true
-echo "------------------------------------------------------------------------------"
-
-# ------------------------------------------------------------------------------
-# 3. Direct Foreground Test (Captures Hidden Errors)
-# ------------------------------------------------------------------------------
-echo -e "\n${CYAN}${BOLD}[3/5] Testing Direct k3s Server Launch (capturing stderr)...${NC}"
-if [ -x /usr/local/bin/k3s ]; then
-    TMP_ERR=$(mktemp)
-    # Run k3s server directly with a 4-second timeout to capture immediate fatal errors
-    timeout 4 /usr/local/bin/k3s server > /dev/null 2> "${TMP_ERR}" || true
-    if [ -s "${TMP_ERR}" ]; then
-        echo -e "${YELLOW}Captured direct startup output:${NC}"
-        grep -E "(FATA|ERRO|WARN|panic|fail|SELinux|denied|bind)" "${TMP_ERR}" | head -n 15 || cat "${TMP_ERR}" | head -n 15
-    fi
-    rm -f "${TMP_ERR}"
+# Check for rogue wrapper scripts that cause recursion loops
+if [ -f /usr/local/bin/k3s-server ] || [ -f /usr/bin/k3s-server ]; then
+    echo -e "${YELLOW} - Rogue wrappers:     DETECTED (this causes 'argument list too long')${NC}"
 fi
 
 # ------------------------------------------------------------------------------
-# 4. Applying Targeted Fixes
+# 2. Emergency Cleanup: Kill Processes & Remove Recursive Wrappers
 # ------------------------------------------------------------------------------
-echo -e "\n${CYAN}${BOLD}[4/5] Applying Targeted Fixes for Common RHEL 9 Failures...${NC}"
+echo -e "\n${CYAN}${BOLD}[2/5] Cleaning Up Rogue Files, Stale Processes & Corrupt Cache...${NC}"
 
-# Fix A: SELinux labeling on binary and state directories
-if command -v restorecon >/dev/null 2>&1; then
-    echo " -> Restoring SELinux security contexts on /usr/local/bin/k3s and /etc/rancher..."
-    restorecon -v /usr/local/bin/k3s >/dev/null 2>&1 || true
-    restorecon -R -v /etc/rancher /var/lib/rancher >/dev/null 2>&1 || true
+# A: Stop services and kill lingering processes
+echo " -> Stopping k3s service and killing stale processes..."
+systemctl stop k3s 2>/dev/null || true
+systemctl stop k3s-server 2>/dev/null || true
+pkill -9 -x k3s 2>/dev/null || true
+pkill -9 -x containerd 2>/dev/null || true
+sleep 1
+
+# B: CRITICAL: Remove rogue wrapper scripts causing the recursion bomb!
+# When k3s executes, it self-extracts and runs its internal server component.
+# A script named 'k3s-server' calling 'k3s server' creates an infinite loop that
+# exhausts kernel argument space (E2BIG: Argument list too long).
+echo " -> Eliminating rogue wrapper scripts..."
+rm -f /usr/local/bin/k3s-server /usr/bin/k3s-server
+rm -f /usr/local/bin/k3s-agent /usr/bin/k3s-agent
+rm -f /etc/systemd/system/k3s-server.service
+
+# C: CRITICAL: Wipe corrupted self-extraction cache and locks!
+# If a previous start was killed or blocked by SELinux, a broken directory in
+# /var/lib/rancher/k3s/data blocks subsequent extractions, resulting in:
+# "k3s-server: executable file not found in $PATH".
+echo " -> Wiping stale k3s extraction cache (/var/lib/rancher/k3s/data)..."
+rm -rf /var/lib/rancher/k3s/data
+rm -f /var/lib/rancher/k3s/.lock
+rm -f /var/lib/rancher/k3s/data/.lock
+
+# ------------------------------------------------------------------------------
+# 3. Applying System, Filesystem & SELinux Fixes
+# ------------------------------------------------------------------------------
+echo -e "\n${CYAN}${BOLD}[3/5] Applying System, Filesystem & SELinux Fixes...${NC}"
+
+# Fix A: If /var is mounted noexec, remount it with exec
+if mount | grep -E '\s(/var|/var/lib)\s.*noexec' >/dev/null 2>&1; then
+    echo " -> Remounting /var with 'exec' permissions..."
+    mount -o remount,exec /var 2>/dev/null || true
 fi
 
-# Fix B: Remove 'selinux: true' from config.yaml if container-selinux causes a crash
-if [ -f /etc/rancher/k3s/config.yaml ]; then
-    if grep -q "selinux: true" /etc/rancher/k3s/config.yaml; then
-        echo " -> Disabling 'selinux: true' in /etc/rancher/k3s/config.yaml to bypass containerd SELinux crash..."
-        sed -i '/selinux: true/d' /etc/rancher/k3s/config.yaml
-    fi
-fi
-
-# Fix C: Ensure required kernel modules are loaded
+# Fix B: Ensure kernel modules are loaded
 echo " -> Ensuring br_netfilter and overlay kernel modules are loaded..."
 modprobe br_netfilter 2>/dev/null || true
 modprobe overlay 2>/dev/null || true
 
-# Fix D: Ensure k3s binary is installed in both /usr/local/bin and /usr/bin
+# Fix C: Disable 'selinux: true' in config.yaml if present (prevents containerd crash on RHEL 9)
+if [ -f /etc/rancher/k3s/config.yaml ]; then
+    if grep -q "selinux: true" /etc/rancher/k3s/config.yaml; then
+        echo " -> Disabling 'selinux: true' in /etc/rancher/k3s/config.yaml..."
+        sed -i '/selinux: true/d' /etc/rancher/k3s/config.yaml
+    fi
+fi
+
+# Fix D: Ensure k3s binary is valid in /usr/local/bin and /usr/bin
 if [ ! -x /usr/local/bin/k3s ]; then
     echo " -> Searching for k3s binary on disk..."
     FOUND_K3S=$(find /root /tmp "${PWD}" -name "k3s" -type f -perm /111 2>/dev/null | head -n 1 || true)
     if [ -n "${FOUND_K3S}" ]; then
-        echo " -> Found k3s binary at ${FOUND_K3S}. Installing to /usr/local/bin/k3s and /usr/bin/k3s..."
+        echo " -> Found k3s binary at ${FOUND_K3S}. Installing to /usr/local/bin/k3s..."
         cp -f "${FOUND_K3S}" /usr/local/bin/k3s
         chmod +x /usr/local/bin/k3s
     fi
@@ -114,36 +138,28 @@ if [ -x /usr/local/bin/k3s ]; then
     cp -f /usr/local/bin/k3s /usr/bin/k3s 2>/dev/null || ln -sf /usr/local/bin/k3s /usr/bin/k3s
     chmod +x /usr/bin/k3s 2>/dev/null || true
 
-    # Provide kubectl, crictl, ctr
+    # Provide kubectl, crictl, ctr multicall links ONLY
+    echo " -> Linking CLI tools (kubectl, crictl, ctr)..."
     ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
     ln -sf /usr/local/bin/k3s /usr/bin/kubectl
     ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
     ln -sf /usr/local/bin/k3s /usr/bin/crictl
     ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
     ln -sf /usr/local/bin/k3s /usr/bin/ctr
-
-    # Provide k3s-server wrapper for scripts expecting 'k3s-server'
-    echo " -> Creating k3s-server wrapper in /usr/bin/k3s-server and /usr/local/bin/k3s-server..."
-    cat << 'EOF' > /usr/local/bin/k3s-server
-#!/bin/sh
-exec /usr/bin/k3s server "$@"
-EOF
-    chmod +x /usr/local/bin/k3s-server
-    ln -sf /usr/local/bin/k3s-server /usr/bin/k3s-server
-
-    # Provide k3s-agent wrapper
-    cat << 'EOF' > /usr/local/bin/k3s-agent
-#!/bin/sh
-exec /usr/bin/k3s agent "$@"
-EOF
-    chmod +x /usr/local/bin/k3s-agent
-    ln -sf /usr/local/bin/k3s-agent /usr/bin/k3s-agent
 fi
 
-# Fix E: Ensure systemd unit file is properly structured (and alias k3s-server.service)
-if [ ! -f /etc/systemd/system/k3s.service ]; then
-    echo " -> Creating missing /etc/systemd/system/k3s.service unit..."
-    cat << 'EOF' > /etc/systemd/system/k3s.service
+# Fix E: SELinux labeling on binaries and state directories
+if command -v restorecon >/dev/null 2>&1; then
+    echo " -> Restoring SELinux security contexts on binaries and directories..."
+    chcon -t bin_t /usr/local/bin/k3s /usr/bin/k3s 2>/dev/null || true
+    restorecon -v /usr/local/bin/k3s /usr/bin/k3s >/dev/null 2>&1 || true
+    mkdir -p /var/lib/rancher /etc/rancher
+    restorecon -R -v /etc/rancher /var/lib/rancher >/dev/null 2>&1 || true
+fi
+
+# Fix F: Re-create standard systemd unit file
+echo " -> Writing clean /etc/systemd/system/k3s.service unit..."
+cat << 'EOF' > /etc/systemd/system/k3s.service
 [Unit]
 Description=Lightweight Kubernetes
 Documentation=https://k3s.io
@@ -166,21 +182,13 @@ Restart=always
 RestartSec=5s
 ExecStartPre=-/sbin/modprobe br_netfilter
 ExecStartPre=-/sbin/modprobe overlay
-ExecStart=/usr/bin/k3s server
+ExecStart=/usr/local/bin/k3s server
 
 [Install]
 WantedBy=multi-user.target
 EOF
-fi
 
-# Ensure ExecStart uses /usr/bin/k3s or /usr/local/bin/k3s reliably
-sed -i 's|ExecStart=k3s-server|ExecStart=/usr/bin/k3s server|g' /etc/systemd/system/k3s.service 2>/dev/null || true
-sed -i 's|ExecStart=/usr/local/bin/k3s-server|ExecStart=/usr/bin/k3s server|g' /etc/systemd/system/k3s.service 2>/dev/null || true
-
-# Symlink k3s-server.service to k3s.service
-ln -sf /etc/systemd/system/k3s.service /etc/systemd/system/k3s-server.service
-
-# Configure global environment for all shells
+# Ensure global profile
 cat << 'EOF' > /etc/profile.d/k3s.sh
 export PATH="/usr/local/bin:/usr/bin:$PATH"
 if [ -f /etc/rancher/k3s/k3s.yaml ]; then
@@ -189,24 +197,39 @@ fi
 EOF
 chmod +x /etc/profile.d/k3s.sh
 
-# Fix F: Kill any zombie k3s or containerd processes holding port 6443
-if pgrep -x k3s >/dev/null 2>&1; then
-    echo " -> Stopping stale k3s processes..."
-    systemctl stop k3s 2>/dev/null || true
-    pkill -9 -x k3s 2>/dev/null || true
-    sleep 2
+# ------------------------------------------------------------------------------
+# 4. Direct Foreground Test (Verifies Clean Self-Extraction)
+# ------------------------------------------------------------------------------
+echo -e "\n${CYAN}${BOLD}[4/5] Testing Direct k3s Server Launch & Clean Extraction...${NC}"
+if [ -x /usr/local/bin/k3s ]; then
+    TMP_ERR=$(mktemp)
+    echo " -> Running '/usr/local/bin/k3s server' for 4 seconds to test self-extraction..."
+    timeout 4 /usr/local/bin/k3s server > /dev/null 2> "${TMP_ERR}" || true
+    if [ -s "${TMP_ERR}" ]; then
+        if grep -q -E "(Argument list too long|executable file not found in \$PATH)" "${TMP_ERR}"; then
+            echo -e "${RED}✖ FATAL: k3s still reported extraction failure:${NC}"
+            cat "${TMP_ERR}"
+            rm -f "${TMP_ERR}"
+            exit 1
+        else
+            echo -e "${GREEN}✔ Self-extraction succeeded without recursion or missing binary errors.${NC}"
+        fi
+    else
+        echo -e "${GREEN}✔ Direct startup check passed cleanly.${NC}"
+    fi
+    rm -f "${TMP_ERR}"
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Restarting Service & Verifying Recovery
+# 5. Starting Service & Verifying Cluster Health
 # ------------------------------------------------------------------------------
-echo -e "\n${CYAN}${BOLD}[5/5] Restarting k3s Service...${NC}"
+echo -e "\n${CYAN}${BOLD}[5/5] Starting k3s Systemd Service...${NC}"
 systemctl daemon-reload
 systemctl enable k3s >/dev/null 2>&1 || true
 systemctl restart k3s || systemctl start k3s
 
-echo " -> Waiting up to 30 seconds for k3s cluster to initialize..."
-WAIT_RETRIES=15
+echo " -> Waiting up to 35 seconds for k3s cluster to initialize..."
+WAIT_RETRIES=18
 SUCCESS=false
 
 while [ $WAIT_RETRIES -gt 0 ]; do
@@ -230,7 +253,7 @@ if [ "$SUCCESS" = true ]; then
     cp -f /etc/rancher/k3s/k3s.yaml /root/.kube/config
     chmod 600 /root/.kube/config
 
-    kubectl get nodes
+    /usr/local/bin/kubectl get nodes || /usr/bin/kubectl get nodes
     echo ""
     echo "You can now run: sudo ./deploy-workloads.sh"
     echo -e "${GREEN}${BOLD}==============================================================================${NC}\n"
@@ -243,7 +266,7 @@ else
     systemctl status k3s --no-pager || true
     echo ""
     echo -e "${YELLOW}Latest Journal Logs:${NC}"
-    journalctl -u k3s -n 30 --no-pager || true
+    journalctl -u k3s -n 35 --no-pager || true
     echo -e "${RED}${BOLD}==============================================================================${NC}\n"
     exit 1
 fi

@@ -326,9 +326,17 @@ fi
 # Ensure symlinks exist if k3s binary is installed
 if [ -f /usr/local/bin/k3s ]; then
     restorecon -v /usr/local/bin/k3s 2>/dev/null || true
+    cp -f /usr/local/bin/k3s /usr/bin/k3s 2>/dev/null || ln -sf /usr/local/bin/k3s /usr/bin/k3s
+    chmod +x /usr/bin/k3s 2>/dev/null || true
     ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+    ln -sf /usr/local/bin/k3s /usr/bin/kubectl
     ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+    ln -sf /usr/local/bin/k3s /usr/bin/crictl
     ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
+    ln -sf /usr/local/bin/k3s /usr/bin/ctr
+    # Clean up rogue wrapper scripts that cause recursion loops
+    rm -f /usr/local/bin/k3s-server /usr/bin/k3s-server /usr/local/bin/k3s-agent /usr/bin/k3s-agent
+    rm -f /etc/systemd/system/k3s-server.service
 fi
 
 cat << EOF > /etc/rancher/k3s/config.yaml
