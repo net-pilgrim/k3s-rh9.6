@@ -270,14 +270,41 @@ done
 log_success "k3s cluster is Ready."
 
 # 8. Deploy Workload Manifests Offline
-log_step "[8/8] Deploying Platform Workloads (Offline Manifests)..."
+log_step "[8/8] Deploying Platform Workloads (Offline Mode)..."
 
+if [ -f "${SCRIPT_DIR}/deploy-workloads.sh" ]; then
+    bash "${SCRIPT_DIR}/deploy-workloads.sh" --domain "${DOMAIN}" --admin-pass "${ADMIN_PASS}"
+    exit 0
+fi
+
+# Ensure all namespaces exist
 for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 done
 
+# 8.1. Cert-Manager Deployment
+log_info "Installing cert-manager..."
+CERT_MANAGER_YAML=$(find "${SCRIPT_DIR}/manifests/cert-manager" "${SCRIPT_DIR}" -name "cert-manager.yaml" 2>/dev/null | head -n 1 || true)
+CERT_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "cert-manager-*.tgz" 2>/dev/null | head -n 1 || true)
+
+if [ -n "${CERT_MANAGER_YAML}" ] && [ -f "${CERT_MANAGER_YAML}" ]; then
+    log_info "Applying official cert-manager manifest: ${CERT_MANAGER_YAML}..."
+    kubectl apply -f "${CERT_MANAGER_YAML}" >/dev/null || true
+elif [ -n "${CERT_CHART}" ] && [ -f "${CERT_CHART}" ]; then
+    log_info "Installing cert-manager via local Helm chart: ${CERT_CHART}..."
+    helm upgrade --install cert-manager "${CERT_CHART}" \
+        --namespace cert-manager \
+        --set crds.enabled=true \
+        --wait --timeout 5m >/dev/null || true
+fi
+
+# Wait for cert-manager-webhook before applying ClusterIssuer
+log_info "Waiting for cert-manager-webhook to become responsive..."
+kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=90s 2>/dev/null || sleep 10
+
 # Apply ClusterIssuer (self-signed for airgap)
-cat << 'EOF' | kubectl apply -f - >/dev/null
+log_info "Applying self-signed ClusterIssuer..."
+cat << 'EOF' | kubectl apply -f - >/dev/null || true
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -286,15 +313,202 @@ spec:
   selfSigned: {}
 EOF
 
-# Deploy manifests from ./manifests if present
-if [ -d "${SCRIPT_DIR}/manifests" ]; then
-    log_info "Applying local manifests..."
-    kubectl apply -f "${SCRIPT_DIR}/manifests/00-namespaces.yaml" 2>/dev/null || true
-    kubectl apply -f "${SCRIPT_DIR}/manifests/cert-manager/" 2>/dev/null || true
-    kubectl apply -k "${SCRIPT_DIR}/manifests/itsaplan/" 2>/dev/null || \
-    kubectl apply -f "${SCRIPT_DIR}/manifests/itsaplan/" 2>/dev/null || true
-    kubectl apply -f "${SCRIPT_DIR}/manifests/forgejo-runner/" 2>/dev/null || true
+TMP_DIR=$(mktemp -d -t airgap-workloads-XXXXXX)
+
+# 8.2. Forgejo Git Server Deployment
+log_info "Installing Forgejo Git Server..."
+FORGEJO_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "forgejo-*.tgz" 2>/dev/null | head -n 1 || true)
+
+cat << EOF > "${TMP_DIR}/values-forgejo.yaml"
+image:
+  rootless: true
+
+gitea:
+  admin:
+    existingSecret: ""
+    username: "forgejo-admin"
+    password: "${ADMIN_PASS}"
+    email: "admin@${DOMAIN}"
+  config:
+    server:
+      DOMAIN: "git.${DOMAIN}"
+      ROOT_URL: "https://git.${DOMAIN}/"
+      SSH_DOMAIN: "${DOMAIN}"
+      SSH_PORT: 32222
+      SSH_LISTEN_PORT: 22
+    actions:
+      ENABLED: true
+    service:
+      ENABLE_NOTIFY_MAIL: false
+      DISABLE_REGISTRATION: false
+      ALLOW_ONLY_EXTERNAL_REGISTRATION: false
+      SHOW_REGISTRATION_BUTTON: true
+    oauth2:
+      ENABLE: true
+    security:
+      INSTALL_LOCK: true
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned-issuer
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: "git.${DOMAIN}"
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: forgejo-tls
+      hosts:
+        - "git.${DOMAIN}"
+
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+EOF
+
+if [ -n "${FORGEJO_CHART}" ] && [ -f "${FORGEJO_CHART}" ]; then
+    log_info "Deploying Forgejo using local Helm chart: ${FORGEJO_CHART}..."
+    helm upgrade --install forgejo "${FORGEJO_CHART}" \
+        --namespace forgejo \
+        -f "${TMP_DIR}/values-forgejo.yaml" \
+        --timeout 10m >/dev/null || log_warn "Forgejo Helm install initiated."
+else
+    log_warn "No Forgejo Helm chart (.tgz) found in bundle; applying raw manifests if available."
 fi
+
+# 8.3. Forgejo DinD Runner Deployment
+log_info "Provisioning Forgejo DinD Runner..."
+kubectl create secret generic forgejo-runner-secret \
+    --namespace forgejo-runner \
+    --from-literal=token="initial-bootstrap-token" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
+RUNNER_CM=$(find "${SCRIPT_DIR}/manifests/forgejo-runner" "${SCRIPT_DIR}" -name "runner-configmap.yaml" 2>/dev/null | head -n 1 || true)
+RUNNER_SS=$(find "${SCRIPT_DIR}/manifests/forgejo-runner" "${SCRIPT_DIR}" -name "runner-statefulset.yaml" 2>/dev/null | head -n 1 || true)
+
+if [ -n "${RUNNER_CM}" ] && [ -f "${RUNNER_CM}" ]; then
+    kubectl apply -f "${RUNNER_CM}" >/dev/null
+fi
+if [ -n "${RUNNER_SS}" ] && [ -f "${RUNNER_SS}" ]; then
+    kubectl apply -f "${RUNNER_SS}" >/dev/null
+fi
+
+# 8.4. Plane Deployment
+log_info "Installing Plane Management Suite..."
+PLANE_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "plane-ce-*.tgz" 2>/dev/null | head -n 1 || true)
+
+cat << EOF > "${TMP_DIR}/values-plane.yaml"
+planeVersion: "v2.6.3"
+env:
+  storageClass: "local-path"
+  secretKey: "plane-secure-key-${RANDOM}${RANDOM}"
+
+ingress:
+  enabled: true
+  ingressClass: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned-issuer
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  appHost: "plane.${DOMAIN}"
+  tls: true
+  secretName: "plane-tls"
+
+postgresql:
+  auth:
+    username: "plane"
+    password: "${ADMIN_PASS}"
+    database: "plane"
+  primary:
+    persistence:
+      storageClass: "local-path"
+      size: 20Gi
+
+redis:
+  auth:
+    password: "${ADMIN_PASS}"
+  master:
+    persistence:
+      storageClass: "local-path"
+      size: 5Gi
+
+minio:
+  rootUser: "plane-access-key"
+  rootPassword: "${ADMIN_PASS}"
+  persistence:
+    storageClass: "local-path"
+    size: 20Gi
+
+rabbitmq:
+  auth:
+    username: "plane"
+    password: "${ADMIN_PASS}"
+  persistence:
+    storageClass: "local-path"
+    size: 5Gi
+EOF
+
+if [ -n "${PLANE_CHART}" ] && [ -f "${PLANE_CHART}" ]; then
+    log_info "Deploying Plane using local Helm chart: ${PLANE_CHART}..."
+    helm upgrade --install plane-app "${PLANE_CHART}" \
+        --namespace plane \
+        -f "${TMP_DIR}/values-plane.yaml" \
+        --timeout 12m >/dev/null || log_warn "Plane Helm install initiated in background."
+else
+    log_warn "No Plane Helm chart (.tgz) found in bundle!"
+fi
+
+# 8.5. It's a Plan Deployment
+log_info "Deploying It's a Plan AI Issue Tracker..."
+ITSAPLAN_DIR="${SCRIPT_DIR}/manifests/itsaplan"
+if [ -d "${ITSAPLAN_DIR}" ]; then
+    BETTER_AUTH_SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    APP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+
+    cat << EOF | kubectl apply -f - >/dev/null
+apiVersion: v1
+kind: Secret
+metadata:
+  name: itsaplan-secrets
+  namespace: itsaplan
+type: Opaque
+stringData:
+  POSTGRES_USER: "itsaplan"
+  POSTGRES_PASSWORD: "${ADMIN_PASS}"
+  POSTGRES_DB: "itsaplan"
+  DATABASE_URL: "postgres://itsaplan:${ADMIN_PASS}@itsaplan-postgres:5432/itsaplan"
+  S3_ACCESS_KEY_ID: "rustfs-admin"
+  S3_SECRET_ACCESS_KEY: "${ADMIN_PASS}"
+  S3_BUCKET: "planner-attachments"
+  BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET}"
+  APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY}"
+  API_URL: "https://api.itsaplan.${DOMAIN}"
+  APP_URL: "https://itsaplan.${DOMAIN}"
+EOF
+
+    for f in "${ITSAPLAN_DIR}"/*.yaml; do
+        if [[ "$(basename "$f")" != "00-config-secret.yaml" && "$(basename "$f")" != "kustomization.yaml" ]]; then
+            sed "s/cluster.internal/${DOMAIN}/g" "$f" | kubectl apply -f - >/dev/null || true
+        fi
+    done
+fi
+
+rm -rf "${TMP_DIR}"
+
+log_info "Waiting 10 seconds for initial pod scheduling across namespaces..."
+sleep 10
+
+echo ""
+log_step "Current Workload Status across Namespaces:"
+for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
+    echo -e "\n${CYAN}${BOLD}--- Namespace: ${ns} ---${NC}"
+    kubectl get pods -n "$ns" -o wide 2>/dev/null || echo "No resources found."
+done
 
 CREDENTIALS_FILE="/root/.pipeline-credentials.txt"
 cat << EOF > "${CREDENTIALS_FILE}"

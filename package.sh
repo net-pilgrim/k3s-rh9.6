@@ -80,7 +80,7 @@ CURL_OPTS="--tlsv1.2 --tls-max 1.2"
 BUNDLE_NAME="k3s-rh9.6-bundle"
 STAGING_DIR="${SCRIPT_DIR}/${BUNDLE_NAME}"
 rm -rf "${STAGING_DIR}"
-mkdir -p "${STAGING_DIR}"/{bin,rpms,images,manifests}
+mkdir -p "${STAGING_DIR}"/{bin,rpms,images,manifests,charts}
 
 # ------------------------------------------------------------------------------
 # 1. Download k3s binary & installer script
@@ -109,15 +109,19 @@ curl ${CURL_OPTS} -fL "${SELINUX_RPM_URL}" -o "${STAGING_DIR}/rpms/k3s-selinux-1
 log_success "k3s-selinux RPM ready."
 
 # ------------------------------------------------------------------------------
-# 4. Download Helm 3 standalone binary
+# 4. Download Helm 3 standalone binary & Charts
 # ------------------------------------------------------------------------------
-log_step "[4/6] Downloading Helm 3 standalone binary (${HELM_VERSION})..."
+log_step "[4/6] Downloading Helm 3 standalone binary (${HELM_VERSION}) and local charts..."
 TMP_HELM_DIR=$(mktemp -d -t helm-XXXXXX)
 curl ${CURL_OPTS} -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C "${TMP_HELM_DIR}"
 mv "${TMP_HELM_DIR}/linux-amd64/helm" "${STAGING_DIR}/bin/helm"
 chmod +x "${STAGING_DIR}/bin/helm"
 rm -rf "${TMP_HELM_DIR}"
-log_success "Helm 3 binary ready."
+
+if [ -d "${SCRIPT_DIR}/charts" ]; then
+    cp -r "${SCRIPT_DIR}/charts"/* "${STAGING_DIR}/charts/" 2>/dev/null || true
+fi
+log_success "Helm 3 binary and charts ready."
 
 # ------------------------------------------------------------------------------
 # 5. Optional: Download Workload Images (Forgejo, Runner, Plane, It's a Plan)
@@ -125,6 +129,9 @@ log_success "Helm 3 binary ready."
 if [ "$INCLUDE_WORKLOADS" = true ]; then
     log_step "[5/6] Pulling and packaging workload container images..."
     WORKLOAD_IMAGES=(
+        "quay.io/jetstack/cert-manager-controller:v1.17.1"
+        "quay.io/jetstack/cert-manager-cainjector:v1.17.1"
+        "quay.io/jetstack/cert-manager-webhook:v1.17.1"
         "code.forgejo.org/forgejo/forgejo:10.0.1"
         "code.forgejo.org/forgejo/runner:4.0.1"
         "docker:27-dind"
@@ -138,6 +145,13 @@ if [ "$INCLUDE_WORKLOADS" = true ]; then
         "ghcr.io/croffasia/itsaplan-web:latest"
         "ghcr.io/croffasia/itsaplan-worker:latest"
         "ghcr.io/croffasia/itsaplan-bot:latest"
+        "makeplane/plane-backend:v2.6.3"
+        "makeplane/plane-frontend:v2.6.3"
+        "makeplane/plane-space:v2.6.3"
+        "makeplane/plane-admin:v2.6.3"
+        "redis:7-alpine"
+        "rabbitmq:3-management-alpine"
+        "minio/minio:RELEASE.2023-09-07T02-17-04Z"
     )
 
     CRANE_BIN=""
@@ -185,12 +199,14 @@ fi
 log_step "[6/6] Packaging manifests, offline installer, and creating archive..."
 cp "${SCRIPT_DIR}/install-airgap.sh" "${STAGING_DIR}/install.sh"
 chmod +x "${STAGING_DIR}/install.sh"
+cp "${SCRIPT_DIR}/deploy-workloads.sh" "${STAGING_DIR}/deploy-workloads.sh"
+chmod +x "${STAGING_DIR}/deploy-workloads.sh"
 cp -r "${SCRIPT_DIR}/manifests"/* "${STAGING_DIR}/manifests/"
 
 cat << 'EOF' > "${STAGING_DIR}/README.md"
 # k3s Offline Air-Gap Package for RHEL 9.6
 
-This package contains all binaries, RPM policies, container images, and Kubernetes manifests required to deploy the complete platform on RHEL 9.6 with ZERO internet access.
+This package contains all binaries, RPM policies, container images, Helm charts, and Kubernetes manifests required to deploy the complete platform on RHEL 9.6 with ZERO internet access.
 
 ## Quick Installation on the Air-Gapped Server:
 
@@ -200,13 +216,20 @@ cd k3s-rh9.6-bundle
 sudo ./install.sh
 ```
 
+Or deploy/redeploy workloads directly on an existing cluster:
+```bash
+sudo ./deploy-workloads.sh
+```
+
 ## Included in this Bundle:
 - `bin/k3s`: Standalone k3s server & agent binary
 - `bin/helm`: Standalone Helm 3 binary
 - `rpms/k3s-selinux*.rpm`: Pre-downloaded SELinux policy RPM for RHEL 9.6
 - `images/`: Core and workload image tarballs for automatic import by containerd
+- `charts/`: Offline Helm charts for cert-manager, Forgejo, and Plane CE
 - `k3s-install.sh`: Offline-compatible k3s bootstrap installer
 - `install.sh`: Fully autonomous 1-step offline installation script
+- `deploy-workloads.sh`: Standalone workload deployment engine
 - `manifests/`: Declarative manifests for Forgejo, Runner, DinD, Plane, and It's a Plan
 EOF
 

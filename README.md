@@ -83,6 +83,8 @@ If your target machine has no direct internet egress or blocked external reposit
    tar -xzf k3s-rh9.6-offline-bundle.tar.gz
    cd k3s-rh9.6-bundle
    sudo ./install.sh
+   # Or if k3s is already running, deploy/redeploy workloads directly:
+   sudo ./deploy-workloads.sh
    ```
 
 ### 🌐 Behind a Corporate Proxy?
@@ -100,9 +102,11 @@ curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgri
 
 ```
 pipeline/
+├── deploy-workloads.sh                  # 🚀 Standalone workload installer (Forgejo, Runner, Plane, It's a Plan)
 ├── install.sh                           # ⚡ Autonomous 1-step installer (curl | bash)
 ├── install-airgap.sh                    # 🔒 Standalone offline installer for air-gapped systems
 ├── package.sh                           # 📦 Offline bundle generator (RPMs, bins, images, manifests)
+├── charts/                              # 📦 Offline Helm charts (cert-manager, Forgejo, Plane CE)
 ├── ansible.cfg                          # Ansible configuration (pipelining, SSH settings)
 ├── site.yml                             # Master orchestration playbook
 ├── inventory/

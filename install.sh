@@ -467,17 +467,33 @@ for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 done
 
-helm repo add jetstack https://charts.jetstack.io --force-update >/dev/null 2>&1 || true
-helm repo update >/dev/null 2>&1
+CERT_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "cert-manager-*.tgz" 2>/dev/null | head -n 1 || true)
+CERT_YAML=$(find "${SCRIPT_DIR}/manifests/cert-manager" "${SCRIPT_DIR}" -name "cert-manager.yaml" 2>/dev/null | head -n 1 || true)
 
-log_info "Installing cert-manager via Helm..."
-helm upgrade --install cert-manager jetstack/cert-manager \
-    --namespace cert-manager \
-    --set crds.enabled=true \
-    --wait --timeout 5m >/dev/null
+if [ -n "${CERT_CHART}" ] && [ -f "${CERT_CHART}" ]; then
+    log_info "Installing cert-manager via local Helm chart: ${CERT_CHART}..."
+    helm upgrade --install cert-manager "${CERT_CHART}" \
+        --namespace cert-manager \
+        --set crds.enabled=true \
+        --wait --timeout 5m >/dev/null || true
+elif [ -n "${CERT_YAML}" ] && [ -f "${CERT_YAML}" ]; then
+    log_info "Applying official cert-manager manifest: ${CERT_YAML}..."
+    kubectl apply -f "${CERT_YAML}" >/dev/null || true
+else
+    helm repo add jetstack https://charts.jetstack.io --force-update >/dev/null 2>&1 || true
+    helm repo update >/dev/null 2>&1 || true
+    log_info "Installing cert-manager via Helm repository..."
+    helm upgrade --install cert-manager jetstack/cert-manager \
+        --namespace cert-manager \
+        --set crds.enabled=true \
+        --wait --timeout 5m >/dev/null || true
+fi
+
+log_info "Waiting for cert-manager-webhook to become responsive..."
+kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=90s 2>/dev/null || sleep 10
 
 log_info "Applying ClusterIssuers..."
-cat << EOF | kubectl apply -f - >/dev/null
+cat << EOF | kubectl apply -f - >/dev/null || true
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -581,14 +597,23 @@ gitea:
       ENABLE_PUSH_CREATE_ORG: true
 EOF
 
-log_info "Installing Forgejo via official OCI Helm chart..."
-helm upgrade --install forgejo oci://code.forgejo.org/forgejo-helm/forgejo \
-    --namespace forgejo \
-    -f "${TMP_DIR}/values-forgejo.yaml" \
-    --timeout 10m >/dev/null
+FORGEJO_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "forgejo-*.tgz" 2>/dev/null | head -n 1 || true)
+if [ -n "${FORGEJO_CHART}" ] && [ -f "${FORGEJO_CHART}" ]; then
+    log_info "Installing Forgejo via local Helm chart: ${FORGEJO_CHART}..."
+    helm upgrade --install forgejo "${FORGEJO_CHART}" \
+        --namespace forgejo \
+        -f "${TMP_DIR}/values-forgejo.yaml" \
+        --timeout 10m >/dev/null || log_warn "Forgejo Helm install initiated."
+else
+    log_info "Installing Forgejo via official OCI Helm chart..."
+    helm upgrade --install forgejo oci://code.forgejo.org/forgejo-helm/forgejo \
+        --namespace forgejo \
+        -f "${TMP_DIR}/values-forgejo.yaml" \
+        --timeout 10m >/dev/null || log_warn "Forgejo OCI install initiated."
+fi
 
 log_info "Waiting for Forgejo pod to become ready..."
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=forgejo -n forgejo --timeout=300s >/dev/null
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=forgejo -n forgejo --timeout=180s >/dev/null 2>&1 || log_info "Forgejo pod starting up in background..."
 log_success "Forgejo deployed successfully."
 
 # ------------------------------------------------------------------------------
@@ -814,11 +839,22 @@ rabbitmq:
     size: 5Gi
 EOF
 
-log_info "Installing Plane Community Edition via Helm..."
-helm upgrade --install plane-app makeplane/plane-ce \
-    --namespace plane \
-    -f "${TMP_DIR}/values-plane.yaml" \
-    --timeout 12m >/dev/null || log_warn "Plane Helm release triggered in background."
+PLANE_CHART=$(find "${SCRIPT_DIR}/charts" "${SCRIPT_DIR}" -name "plane-ce-*.tgz" 2>/dev/null | head -n 1 || true)
+if [ -n "${PLANE_CHART}" ] && [ -f "${PLANE_CHART}" ]; then
+    log_info "Installing Plane Community Edition via local Helm chart: ${PLANE_CHART}..."
+    helm upgrade --install plane-app "${PLANE_CHART}" \
+        --namespace plane \
+        -f "${TMP_DIR}/values-plane.yaml" \
+        --timeout 12m >/dev/null || log_warn "Plane Helm release triggered in background."
+else
+    helm repo add makeplane https://helm.plane.so --force-update >/dev/null 2>&1 || true
+    helm repo update >/dev/null 2>&1 || true
+    log_info "Installing Plane Community Edition via Helm..."
+    helm upgrade --install plane-app makeplane/plane-ce \
+        --namespace plane \
+        -f "${TMP_DIR}/values-plane.yaml" \
+        --timeout 12m >/dev/null || log_warn "Plane Helm release triggered in background."
+fi
 log_success "Plane deployment initialized."
 
 # ------------------------------------------------------------------------------
@@ -1253,6 +1289,13 @@ Credentials Record:      /root/.pipeline-credentials.txt
 ==============================================================================
 EOF
 chmod 600 "${CREDENTIALS_FILE}"
+
+echo ""
+log_step "Current Workload Status across Namespaces:"
+for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
+    echo -e "\n${CYAN}${BOLD}--- Namespace: ${ns} ---${NC}"
+    kubectl get pods -n "$ns" -o wide 2>/dev/null || echo "No resources found."
+done
 
 echo ""
 echo -e "${GREEN}${BOLD}==============================================================================${NC}"

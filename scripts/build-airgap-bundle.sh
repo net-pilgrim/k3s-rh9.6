@@ -26,7 +26,7 @@ echo "Output Directory:   ${OUTPUT_DIR}"
 echo "=============================================================================="
 
 rm -rf "${OUTPUT_DIR}" "${ARCHIVE_FILE}"
-mkdir -p "${OUTPUT_DIR}"/{bin,rpms,images,manifests,scripts}
+mkdir -p "${OUTPUT_DIR}"/{bin,rpms,images,manifests,charts,scripts}
 
 CURL_OPTS="--tlsv1.2 --tls-max 1.2"
 
@@ -49,10 +49,13 @@ mv "/tmp/linux-amd64/helm" "${OUTPUT_DIR}/bin/helm"
 chmod +x "${OUTPUT_DIR}/bin/helm"
 rm -rf "/tmp/linux-amd64"
 
-echo "--> [5/5] Packaging offline installer and manifests..."
+echo "--> [5/5] Packaging offline installer, charts, and manifests..."
 cp "${PROJECT_ROOT}/install-airgap.sh" "${OUTPUT_DIR}/install-airgap.sh"
 chmod +x "${OUTPUT_DIR}/install-airgap.sh"
 cp -r "${PROJECT_ROOT}/manifests"/* "${OUTPUT_DIR}/manifests/"
+if [ -d "${PROJECT_ROOT}/charts" ]; then
+    cp -r "${PROJECT_ROOT}/charts"/* "${OUTPUT_DIR}/charts/" 2>/dev/null || true
+fi
 
 cat << 'EOF' > "${OUTPUT_DIR}/README.md"
 # k3s Offline Air-Gap Installation Package for RHEL 9.6
