@@ -19,3 +19,12 @@ k3s-pipeline.yaml
 .env
 .env.*
 !.env.example
+
+# Air-gap archives and bundles
+k3s-airgap-rhel9-bundle/
+*.tar.gz
+*.tar.zst
+*.rpm
+bin/
+rpms/
+images/

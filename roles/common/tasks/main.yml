@@ -76,20 +76,39 @@
           - selinux-policy-base
         state: present
 
-    - name: Add Rancher k3s common repository on RHEL
-      ansible.builtin.yum_repository:
-        name: rancher-k3s-common-stable
-        description: Rancher K3s Common (stable)
-        baseurl: https://rpm.rancher.io/k3s/stable/common/centos/9/noarch
-        enabled: true
-        gpgcheck: true
-        repo_gpgcheck: false
-        gpgkey: https://rpm.rancher.io/public.key
+    - name: Check if rpm.rancher.io is reachable
+      ansible.builtin.uri:
+        url: https://rpm.rancher.io/public.key
+        method: HEAD
+        timeout: 4
+      register: rancher_repo_reachability
+      failed_when: false
 
-    - name: Install k3s-selinux RPM on RHEL
-      ansible.builtin.package:
-        name: k3s-selinux
-        state: present
+    - name: Configure Rancher k3s repository when reachable
+      when: rancher_repo_reachability.status | default(0) == 200
+      block:
+        - name: Add Rancher k3s common repository on RHEL
+          ansible.builtin.yum_repository:
+            name: rancher-k3s-common-stable
+            description: Rancher K3s Common (stable)
+            baseurl: https://rpm.rancher.io/k3s/stable/common/centos/9/noarch
+            enabled: true
+            gpgcheck: true
+            repo_gpgcheck: false
+            gpgkey: https://rpm.rancher.io/public.key
+            skip_if_unavailable: true
+
+        - name: Install k3s-selinux RPM on RHEL
+          ansible.builtin.package:
+            name: k3s-selinux
+            state: present
+          failed_when: false
+
+    - name: Remove unreachable Rancher repository if present
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/rancher-k3s-common-stable.repo
+        state: absent
+      when: rancher_repo_reachability.status | default(0) != 200
 
     - name: Check if firewalld is active
       ansible.builtin.command: systemctl is-active firewalld

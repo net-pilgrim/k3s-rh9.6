@@ -200,17 +200,28 @@ if [ -f /etc/os-release ]; then
 fi
 
 if [ "$IS_RHEL" = true ]; then
+    # Clean up any stale or unreachable rancher repos that lock up dnf
+    rm -f /etc/yum.repos.d/rancher-k3s-common*.repo 2>/dev/null || true
+
     log_info "Installing EPEL and core packages for RHEL..."
-    dnf install -y -q epel-release 2>/dev/null || true
-    dnf install -y -q curl wget jq tar socat conntrack-tools iptables git openssl
+    dnf install -y -q --setopt=skip_if_unavailable=True epel-release 2>/dev/null || true
+    dnf install -y -q --setopt=skip_if_unavailable=True curl wget jq tar socat conntrack-tools iptables git openssl 2>/dev/null || \
+    dnf install -y -q curl wget tar socat conntrack-tools iptables git openssl
 
     # Check and configure SELinux for k3s on RHEL
     if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
-        log_info "SELinux is active. Installing container-selinux and Rancher k3s-selinux RPM..."
-        dnf install -y -q container-selinux selinux-policy-base 2>/dev/null || true
+        log_info "SELinux is active. Checking container-selinux..."
+        dnf install -y -q --setopt=skip_if_unavailable=True container-selinux selinux-policy-base 2>/dev/null || true
 
-        # Install Rancher k3s common repo for EL9
-        cat << 'EOF' > /etc/yum.repos.d/rancher-k3s-common.repo
+        # Check if local k3s-selinux RPM is provided in current directory or /tmp
+        LOCAL_SELINUX_RPM=$(find . /tmp /root -maxdepth 2 -name "k3s-selinux*.rpm" 2>/dev/null | head -n 1 || true)
+        if [ -n "${LOCAL_SELINUX_RPM}" ] && [ -f "${LOCAL_SELINUX_RPM}" ]; then
+            log_info "Found local k3s-selinux RPM: ${LOCAL_SELINUX_RPM}. Installing..."
+            rpm -Uvh --nodeps "${LOCAL_SELINUX_RPM}" 2>/dev/null || true
+            log_success "Local k3s-selinux RPM installed."
+        elif curl -sf --connect-timeout 4 https://rpm.rancher.io/public.key >/dev/null 2>&1; then
+            log_info "rpm.rancher.io is reachable. Configuring Rancher k3s repository..."
+            cat << 'EOF' > /etc/yum.repos.d/rancher-k3s-common.repo
 [rancher-k3s-common-stable]
 name=Rancher K3s Common (stable)
 baseurl=https://rpm.rancher.io/k3s/stable/common/centos/9/noarch
@@ -218,9 +229,16 @@ enabled=1
 gpgcheck=1
 repo_gpgcheck=0
 gpgkey=https://rpm.rancher.io/public.key
+skip_if_unavailable=True
 EOF
-        dnf install -y -q k3s-selinux 2>/dev/null || true
-        log_success "k3s-selinux policy installed."
+            dnf install -y -q --setopt=skip_if_unavailable=True k3s-selinux 2>/dev/null || {
+                log_warn "Failed to install k3s-selinux from repository. Cleaning up repo..."
+                rm -f /etc/yum.repos.d/rancher-k3s-common*.repo
+            }
+        else
+            log_warn "rpm.rancher.io is unreachable (air-gapped or restricted network)."
+            log_info "Skipping external k3s repository; continuing with container-selinux."
+        fi
     fi
 
     # Configure firewalld on RHEL if active
@@ -243,31 +261,57 @@ elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq
     apt-get install -y -qq curl wget jq tar socat conntrack iptables git openssl >/dev/null
 elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y -q curl wget jq tar socat conntrack-tools iptables git openssl
+    dnf install -y -q --setopt=skip_if_unavailable=True curl wget jq tar socat conntrack-tools iptables git openssl
 fi
 log_success "Base system packages installed."
 
 # ------------------------------------------------------------------------------
-# Phase 4: Install Helm 3
+# Phase 4: Install Helm 3 (with local binary fallback)
 # ------------------------------------------------------------------------------
 log_step "[4/10] Verifying Helm 3 Package Manager..."
+LOCAL_HELM=$(find . /tmp /root -maxdepth 2 -name "helm" -type f -perm /111 2>/dev/null | head -n 1 || true)
+if [ -n "${LOCAL_HELM}" ] && [ ! -f /usr/local/bin/helm ]; then
+    log_info "Installing Helm from local binary: ${LOCAL_HELM}..."
+    cp "${LOCAL_HELM}" /usr/local/bin/helm
+    chmod +x /usr/local/bin/helm
+fi
+
 if ! command -v helm >/dev/null 2>&1; then
-    log_info "Downloading and installing Helm 3..."
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null
-    log_success "Helm installed: $(helm version --short)"
+    if curl -sf --connect-timeout 4 https://raw.githubusercontent.com >/dev/null 2>&1; then
+        log_info "Downloading and installing Helm 3..."
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null
+        log_success "Helm installed: $(helm version --short)"
+    else
+        log_warn "Cannot download Helm (offline/airgapped). Please place 'helm' binary in /usr/local/bin/."
+    fi
 else
-    log_success "Helm is already present: $(helm version --short)"
+    log_success "Helm is present: $(helm version --short 2>/dev/null || echo 'ready')"
 fi
 
 # ------------------------------------------------------------------------------
-# Phase 5: Install & Bootstrap k3s Cluster
+# Phase 5: Install & Bootstrap k3s Cluster (with Air-Gap / Offline Support)
 # ------------------------------------------------------------------------------
 log_step "[5/10] Installing & Starting k3s Kubernetes Server (${K3S_VERSION})..."
-mkdir -p /etc/rancher/k3s
+mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s/agent/images
+
+# Check if local image archives exist and copy them to the k3s auto-import folder
+for img_dir in . ./images /tmp/images /root/images; do
+    if [ -d "$img_dir" ]; then
+        find "$img_dir" -maxdepth 1 \( -name "*.tar" -o -name "*.tar.gz" -o -name "*.tar.zst" \) -exec cp -v {} /var/lib/rancher/k3s/agent/images/ \; 2>/dev/null || true
+    fi
+done
+
+# Check if local k3s binary exists
+LOCAL_K3S=$(find . /tmp /root -maxdepth 2 -name "k3s" -type f -perm /111 2>/dev/null | head -n 1 || true)
+if [ -n "${LOCAL_K3S}" ] && [ ! -f /usr/local/bin/k3s ]; then
+    log_info "Installing k3s from local binary: ${LOCAL_K3S}..."
+    cp "${LOCAL_K3S}" /usr/local/bin/k3s
+    chmod +x /usr/local/bin/k3s
+fi
 
 # Determine SELinux flag for k3s
 K3S_SELINUX_CONFIG=""
-if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+if rpm -q k3s-selinux >/dev/null 2>&1; then
     K3S_SELINUX_CONFIG="selinux: true"
 fi
 
@@ -286,7 +330,20 @@ disable:
 EOF
 
 if ! command -v k3s >/dev/null 2>&1; then
-    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${K3S_VERSION}" sh -s - server
+    INSTALL_ENV="INSTALL_K3S_VERSION=${K3S_VERSION} INSTALL_K3S_SKIP_SELINUX_RPM=true"
+    if [ -f /usr/local/bin/k3s ]; then
+        INSTALL_ENV="${INSTALL_ENV} INSTALL_K3S_SKIP_DOWNLOAD=true"
+    fi
+
+    # Check for local k3s-install.sh
+    LOCAL_K3S_INSTALL=$(find . /tmp -maxdepth 2 -name "k3s-install.sh" -o -name "install-k3s.sh" 2>/dev/null | head -n 1 || true)
+    if [ -n "${LOCAL_K3S_INSTALL}" ] && [ -f "${LOCAL_K3S_INSTALL}" ]; then
+        log_info "Executing local k3s installer script: ${LOCAL_K3S_INSTALL}..."
+        env ${INSTALL_ENV} bash "${LOCAL_K3S_INSTALL}" server
+    else
+        log_info "Fetching k3s installer from https://get.k3s.io..."
+        curl -sfL https://get.k3s.io | env ${INSTALL_ENV} sh -s - server
+    fi
 else
     log_info "k3s is already installed. Ensuring service is active..."
     systemctl restart k3s

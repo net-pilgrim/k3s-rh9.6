@@ -63,6 +63,30 @@ Or pass CLI arguments:
 curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash -s -- --domain yourdomain.com --email admin@yourdomain.com --tls letsencrypt
 ```
 
+### Option C: 🔒 Air-Gapped / Offline RHEL 9.6 Installation (Zero Internet Access)
+If your target machine has no direct internet egress or blocked external repositories:
+
+1. **Build the offline bundle** on any machine with internet:
+   ```bash
+   ./scripts/build-airgap-bundle.sh
+   # Produces: k3s-airgap-rhel9-bundle.tar.gz (k3s binary, k3s-selinux RPM, Helm, airgap images)
+   ```
+2. **Transfer and extract** on the air-gapped server:
+   ```bash
+   tar -xzf k3s-airgap-rhel9-bundle.tar.gz
+   cd k3s-airgap-rhel9-bundle
+   sudo ./install-airgap.sh
+   ```
+
+### 🌐 Behind a Corporate Proxy?
+If your server requires an HTTP/HTTPS proxy to reach the outside world:
+```bash
+export http_proxy="http://proxy.corp.internal:8080"
+export https_proxy="http://proxy.corp.internal:8080"
+export no_proxy="localhost,127.0.0.1,10.42.0.0/16,10.43.0.0/16,cluster.local"
+curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash
+```
+
 ---
 
 ## Directory Structure
