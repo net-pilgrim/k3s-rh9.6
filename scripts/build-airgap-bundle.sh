@@ -28,21 +28,23 @@ echo "==========================================================================
 rm -rf "${OUTPUT_DIR}" "${ARCHIVE_FILE}"
 mkdir -p "${OUTPUT_DIR}"/{bin,rpms,images,manifests,scripts}
 
+CURL_OPTS="--tlsv1.2 --tls-max 1.2"
+
 echo "--> [1/5] Downloading k3s binary and installer script..."
-curl -fL "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION_URL}/k3s" -o "${OUTPUT_DIR}/bin/k3s"
+curl ${CURL_OPTS} -fL "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION_URL}/k3s" -o "${OUTPUT_DIR}/bin/k3s"
 chmod +x "${OUTPUT_DIR}/bin/k3s"
-curl -fsSL "https://get.k3s.io" -o "${OUTPUT_DIR}/k3s-install.sh"
+curl ${CURL_OPTS} -fsSL "https://get.k3s.io" -o "${OUTPUT_DIR}/k3s-install.sh"
 chmod +x "${OUTPUT_DIR}/k3s-install.sh"
 
 echo "--> [2/5] Downloading k3s air-gap core container images..."
-curl -fL "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION_URL}/k3s-airgap-images-amd64.tar.zst" \
+curl ${CURL_OPTS} -fL "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION_URL}/k3s-airgap-images-amd64.tar.zst" \
     -o "${OUTPUT_DIR}/images/k3s-airgap-images-amd64.tar.zst"
 
 echo "--> [3/5] Downloading k3s-selinux RPM for RHEL 9..."
-curl -fL "${SELINUX_RPM_URL}" -o "${OUTPUT_DIR}/rpms/k3s-selinux-1.6-1.el9.noarch.rpm"
+curl ${CURL_OPTS} -fL "${SELINUX_RPM_URL}" -o "${OUTPUT_DIR}/rpms/k3s-selinux-1.6-1.el9.noarch.rpm"
 
 echo "--> [4/5] Downloading Helm 3 standalone binary..."
-curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C "/tmp"
+curl ${CURL_OPTS} -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C "/tmp"
 mv "/tmp/linux-amd64/helm" "${OUTPUT_DIR}/bin/helm"
 chmod +x "${OUTPUT_DIR}/bin/helm"
 rm -rf "/tmp/linux-amd64"

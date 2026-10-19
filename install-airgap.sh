@@ -37,6 +37,17 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     exit 1
 fi
 
+# Ensure curl enforces TLS 1.2 across the machine
+for curlrc_file in "$HOME/.curlrc" "/root/.curlrc"; do
+    if [ ! -f "$curlrc_file" ] || ! grep -q "tlsv1.2" "$curlrc_file" 2>/dev/null; then
+        mkdir -p "$(dirname "$curlrc_file")" 2>/dev/null || true
+        cat << 'EOF' >> "$curlrc_file" 2>/dev/null || true
+tlsv1.2
+tls-max = 1.2
+EOF
+    fi
+done
+
 DOMAIN="${DOMAIN:-}"
 ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 16)!A1}"
 

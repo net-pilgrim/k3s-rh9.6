@@ -88,6 +88,19 @@ EOF
     esac
 done
 
+# Enforce TLS 1.2 for all curl operations (essential for RHEL 9 enterprise firewalls / middleboxes)
+export CURL_HOME="${CURL_HOME:-$HOME}"
+for curlrc_file in "$HOME/.curlrc" "/root/.curlrc"; do
+    if [ ! -f "$curlrc_file" ] || ! grep -q "tlsv1.2" "$curlrc_file" 2>/dev/null; then
+        mkdir -p "$(dirname "$curlrc_file")" 2>/dev/null || true
+        cat << 'EOF' >> "$curlrc_file" 2>/dev/null || true
+tlsv1.2
+tls-max = 1.2
+EOF
+    fi
+done
+CURL_OPTS="--tlsv1.2 --tls-max 1.2"
+
 # ------------------------------------------------------------------------------
 # Phase 1: Preflight & Privilege Verification
 # ------------------------------------------------------------------------------
@@ -114,8 +127,8 @@ fi
 
 # Detect Public IP
 log_step "[1/10] Detecting Network Configuration & Public IP..."
-PUBLIC_IP=$(curl -s4 --connect-timeout 5 ifconfig.me 2>/dev/null || \
-            curl -s4 --connect-timeout 5 icanhazip.com 2>/dev/null || \
+PUBLIC_IP=$(curl ${CURL_OPTS} -s4 --connect-timeout 5 ifconfig.me 2>/dev/null || \
+            curl ${CURL_OPTS} -s4 --connect-timeout 5 icanhazip.com 2>/dev/null || \
             hostname -I | awk '{print $1}')
 log_info "Detected Host Public IP: ${PUBLIC_IP}"
 
@@ -219,7 +232,7 @@ if [ "$IS_RHEL" = true ]; then
             log_info "Found local k3s-selinux RPM: ${LOCAL_SELINUX_RPM}. Installing..."
             rpm -Uvh --nodeps "${LOCAL_SELINUX_RPM}" 2>/dev/null || true
             log_success "Local k3s-selinux RPM installed."
-        elif curl -sf --connect-timeout 4 https://rpm.rancher.io/public.key >/dev/null 2>&1; then
+        elif curl ${CURL_OPTS} -sf --connect-timeout 4 https://rpm.rancher.io/public.key >/dev/null 2>&1; then
             log_info "rpm.rancher.io is reachable. Configuring Rancher k3s repository..."
             cat << 'EOF' > /etc/yum.repos.d/rancher-k3s-common.repo
 [rancher-k3s-common-stable]
@@ -277,9 +290,9 @@ if [ -n "${LOCAL_HELM}" ] && [ ! -f /usr/local/bin/helm ]; then
 fi
 
 if ! command -v helm >/dev/null 2>&1; then
-    if curl -sf --connect-timeout 4 https://raw.githubusercontent.com >/dev/null 2>&1; then
+    if curl ${CURL_OPTS} -sf --connect-timeout 4 https://raw.githubusercontent.com >/dev/null 2>&1; then
         log_info "Downloading and installing Helm 3..."
-        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null
+        curl ${CURL_OPTS} -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash >/dev/null
         log_success "Helm installed: $(helm version --short)"
     else
         log_warn "Cannot download Helm (offline/airgapped). Please place 'helm' binary in /usr/local/bin/."
@@ -342,7 +355,7 @@ if ! command -v k3s >/dev/null 2>&1; then
         env ${INSTALL_ENV} bash "${LOCAL_K3S_INSTALL}" server
     else
         log_info "Fetching k3s installer from https://get.k3s.io..."
-        curl -sfL https://get.k3s.io | env ${INSTALL_ENV} sh -s - server
+        curl ${CURL_OPTS} -sfL https://get.k3s.io | env ${INSTALL_ENV} sh -s - server
     fi
 else
     log_info "k3s is already installed. Ensuring service is active..."

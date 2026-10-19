@@ -9,11 +9,12 @@ Deploy your full k3s cluster with Forgejo, CI/CD Runner, Plane, and It's a Plan 
 If you want immediate installation directly on the target server without managing local Ansible files:
 
 ```bash
-# Auto-detects public IP and binds working subdomains via nip.io:
-curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash
+# Auto-detects public IP and binds working subdomains via nip.io (with TLS 1.2 middlebox compatibility):
+curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/install.sh | sudo bash
 
 # Or for custom domains with Let's Encrypt:
-DOMAIN="example.com" TLS=letsencrypt EMAIL="admin@example.com" curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash
+DOMAIN="example.com" TLS=letsencrypt EMAIL="admin@example.com" \
+  curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/install.sh | sudo bash
 ```
 
 ---

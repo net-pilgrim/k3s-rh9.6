@@ -45,10 +45,11 @@ A complete, production-ready Infrastructure as Code (IaC) and GitOps deployment 
 You can run the all-in-one installer directly on any fresh **RHEL 9.6 / 9.x**, Rocky Linux, AlmaLinux, Ubuntu, or Debian server:
 
 ### Option A: Dynamic Auto-DNS (`nip.io`) — Zero Setup Required
-If you do not have a domain configured yet, simply run:
+If you do not have a domain configured yet, simply run (using `--tlsv1.2 --tls-max 1.2` to bypass strict middleboxes):
 ```bash
-curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash
+curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/install.sh | sudo bash
 ```
+*(Or via Gist: `curl -fsSL --tlsv1.2 --tls-max 1.2 https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | sudo bash`)*
 
 > [!TIP]
 > The script auto-detects your server's public IP and binds all services to `<PUBLIC_IP>.nip.io` (e.g. `git.<PUBLIC_IP>.nip.io`, `plane.<PUBLIC_IP>.nip.io`, `itsaplan.<PUBLIC_IP>.nip.io`) with working HTTPS immediately.
@@ -56,11 +57,15 @@ curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c52
 ### Option B: Custom Domain with Automated Let's Encrypt TLS
 Point your DNS A records (`git.<domain>`, `plane.<domain>`, `itsaplan.<domain>`, `api.itsaplan.<domain>`) to your server IP, then run:
 ```bash
-DOMAIN="yourdomain.com" TLS=letsencrypt EMAIL="admin@yourdomain.com" curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash
+DOMAIN="yourdomain.com" TLS=letsencrypt EMAIL="admin@yourdomain.com" \
+  curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/install.sh | sudo bash
 ```
 Or pass CLI arguments:
 ```bash
-curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c526246a76418/raw/install.sh | bash -s -- --domain yourdomain.com --email admin@yourdomain.com --tls letsencrypt
+curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim/k3s-rh9.6/main/install.sh | sudo bash -s -- \
+  --domain yourdomain.com \
+  --email admin@yourdomain.com \
+  --tls letsencrypt
 ```
 
 ### Option C: 🔒 Air-Gapped / Offline RHEL 9.6 Installation (Zero Internet Access)
