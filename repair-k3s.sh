@@ -99,14 +99,48 @@ echo " -> Ensuring br_netfilter and overlay kernel modules are loaded..."
 modprobe br_netfilter 2>/dev/null || true
 modprobe overlay 2>/dev/null || true
 
-# Fix D: Ensure symlinks exist
-if [ -x /usr/local/bin/k3s ]; then
-    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
-    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
-    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
+# Fix D: Ensure k3s binary is installed in both /usr/local/bin and /usr/bin
+if [ ! -x /usr/local/bin/k3s ]; then
+    echo " -> Searching for k3s binary on disk..."
+    FOUND_K3S=$(find /root /tmp "${PWD}" -name "k3s" -type f -perm /111 2>/dev/null | head -n 1 || true)
+    if [ -n "${FOUND_K3S}" ]; then
+        echo " -> Found k3s binary at ${FOUND_K3S}. Installing to /usr/local/bin/k3s and /usr/bin/k3s..."
+        cp -f "${FOUND_K3S}" /usr/local/bin/k3s
+        chmod +x /usr/local/bin/k3s
+    fi
 fi
 
-# Fix E: Ensure systemd unit file is properly structured
+if [ -x /usr/local/bin/k3s ]; then
+    cp -f /usr/local/bin/k3s /usr/bin/k3s 2>/dev/null || ln -sf /usr/local/bin/k3s /usr/bin/k3s
+    chmod +x /usr/bin/k3s 2>/dev/null || true
+
+    # Provide kubectl, crictl, ctr
+    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+    ln -sf /usr/local/bin/k3s /usr/bin/kubectl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
+    ln -sf /usr/local/bin/k3s /usr/bin/crictl
+    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
+    ln -sf /usr/local/bin/k3s /usr/bin/ctr
+
+    # Provide k3s-server wrapper for scripts expecting 'k3s-server'
+    echo " -> Creating k3s-server wrapper in /usr/bin/k3s-server and /usr/local/bin/k3s-server..."
+    cat << 'EOF' > /usr/local/bin/k3s-server
+#!/bin/sh
+exec /usr/bin/k3s server "$@"
+EOF
+    chmod +x /usr/local/bin/k3s-server
+    ln -sf /usr/local/bin/k3s-server /usr/bin/k3s-server
+
+    # Provide k3s-agent wrapper
+    cat << 'EOF' > /usr/local/bin/k3s-agent
+#!/bin/sh
+exec /usr/bin/k3s agent "$@"
+EOF
+    chmod +x /usr/local/bin/k3s-agent
+    ln -sf /usr/local/bin/k3s-agent /usr/bin/k3s-agent
+fi
+
+# Fix E: Ensure systemd unit file is properly structured (and alias k3s-server.service)
 if [ ! -f /etc/systemd/system/k3s.service ]; then
     echo " -> Creating missing /etc/systemd/system/k3s.service unit..."
     cat << 'EOF' > /etc/systemd/system/k3s.service
@@ -132,12 +166,28 @@ Restart=always
 RestartSec=5s
 ExecStartPre=-/sbin/modprobe br_netfilter
 ExecStartPre=-/sbin/modprobe overlay
-ExecStart=/usr/local/bin/k3s server
+ExecStart=/usr/bin/k3s server
 
 [Install]
 WantedBy=multi-user.target
 EOF
 fi
+
+# Ensure ExecStart uses /usr/bin/k3s or /usr/local/bin/k3s reliably
+sed -i 's|ExecStart=k3s-server|ExecStart=/usr/bin/k3s server|g' /etc/systemd/system/k3s.service 2>/dev/null || true
+sed -i 's|ExecStart=/usr/local/bin/k3s-server|ExecStart=/usr/bin/k3s server|g' /etc/systemd/system/k3s.service 2>/dev/null || true
+
+# Symlink k3s-server.service to k3s.service
+ln -sf /etc/systemd/system/k3s.service /etc/systemd/system/k3s-server.service
+
+# Configure global environment for all shells
+cat << 'EOF' > /etc/profile.d/k3s.sh
+export PATH="/usr/local/bin:/usr/bin:$PATH"
+if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+fi
+EOF
+chmod +x /etc/profile.d/k3s.sh
 
 # Fix F: Kill any zombie k3s or containerd processes holding port 6443
 if pgrep -x k3s >/dev/null 2>&1; then

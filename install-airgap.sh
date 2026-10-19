@@ -120,26 +120,55 @@ if [ -f "${SCRIPT_DIR}/bin/k3s" ]; then
     cp -f "${SCRIPT_DIR}/bin/k3s" /usr/local/bin/k3s
     chmod +x /usr/local/bin/k3s
     restorecon -v /usr/local/bin/k3s 2>/dev/null || true
-    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
-    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
-    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
     log_success "Installed k3s binary to /usr/local/bin/k3s"
 elif command -v k3s >/dev/null 2>&1; then
     restorecon -v /usr/local/bin/k3s 2>/dev/null || true
-    ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
-    ln -sf /usr/local/bin/k3s /usr/local/bin/crictl
-    ln -sf /usr/local/bin/k3s /usr/local/bin/ctr
     log_success "k3s binary already installed."
 else
     log_error "k3s binary not found in ./bin/k3s or /usr/local/bin/k3s!"
     exit 1
 fi
 
+# Ensure binaries exist in /usr/bin for sudo secure_path on RHEL
+cp -f /usr/local/bin/k3s /usr/bin/k3s 2>/dev/null || ln -sf /usr/local/bin/k3s /usr/bin/k3s
+chmod +x /usr/bin/k3s 2>/dev/null || true
+
+# Symlink standard container tools
+for tool in kubectl crictl ctr; do
+    ln -sf /usr/local/bin/k3s "/usr/local/bin/${tool}"
+    ln -sf /usr/local/bin/k3s "/usr/bin/${tool}"
+done
+
+# Create k3s-server and k3s-agent helper wrappers
+cat << 'EOF' > /usr/local/bin/k3s-server
+#!/bin/sh
+exec /usr/bin/k3s server "$@"
+EOF
+chmod +x /usr/local/bin/k3s-server
+ln -sf /usr/local/bin/k3s-server /usr/bin/k3s-server
+
+cat << 'EOF' > /usr/local/bin/k3s-agent
+#!/bin/sh
+exec /usr/bin/k3s agent "$@"
+EOF
+chmod +x /usr/local/bin/k3s-agent
+ln -sf /usr/local/bin/k3s-agent /usr/bin/k3s-agent
+
+# Set up global profile for PATH and KUBECONFIG
+cat << 'EOF' > /etc/profile.d/k3s.sh
+export PATH="/usr/local/bin:/usr/bin:$PATH"
+if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+fi
+EOF
+chmod +x /etc/profile.d/k3s.sh
+
 if [ -f "${SCRIPT_DIR}/bin/helm" ]; then
     cp -f "${SCRIPT_DIR}/bin/helm" /usr/local/bin/helm
     chmod +x /usr/local/bin/helm
-    restorecon -v /usr/local/bin/helm 2>/dev/null || true
-    log_success "Installed Helm binary to /usr/local/bin/helm"
+    ln -sf /usr/local/bin/helm /usr/bin/helm
+    restorecon -v /usr/local/bin/helm /usr/bin/helm 2>/dev/null || true
+    log_success "Installed Helm binary to /usr/local/bin/helm and /usr/bin/helm"
 fi
 
 # 6. Copy Pre-downloaded Container Images to containerd auto-import directory
