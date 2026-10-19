@@ -71,16 +71,18 @@ curl -fsSL --tlsv1.2 --tls-max 1.2 https://raw.githubusercontent.com/net-pilgrim
 ### Option C: 🔒 Air-Gapped / Offline RHEL 9.6 Installation (Zero Internet Access)
 If your target machine has no direct internet egress or blocked external repositories:
 
-1. **Build the offline bundle** on any machine with internet:
+1. **Build the offline bundle** on any machine with internet access:
    ```bash
-   ./scripts/build-airgap-bundle.sh
-   # Produces: k3s-airgap-rhel9-bundle.tar.gz (k3s binary, k3s-selinux RPM, Helm, airgap images)
+   ./package.sh
+   # Or include all workload container images (Forgejo, Runner, DinD, Plane, It's a Plan):
+   ./package.sh --include-workloads
+   # Produces: k3s-rh9.6-offline-bundle.tar.gz
    ```
 2. **Transfer and extract** on the air-gapped server:
    ```bash
-   tar -xzf k3s-airgap-rhel9-bundle.tar.gz
-   cd k3s-airgap-rhel9-bundle
-   sudo ./install-airgap.sh
+   tar -xzf k3s-rh9.6-offline-bundle.tar.gz
+   cd k3s-rh9.6-bundle
+   sudo ./install.sh
    ```
 
 ### 🌐 Behind a Corporate Proxy?
@@ -98,6 +100,9 @@ curl -fsSL https://gist.githubusercontent.com/net-pilgrim/4f37e7e0d0ddb74b902c52
 
 ```
 pipeline/
+├── install.sh                           # ⚡ Autonomous 1-step installer (curl | bash)
+├── install-airgap.sh                    # 🔒 Standalone offline installer for air-gapped systems
+├── package.sh                           # 📦 Offline bundle generator (RPMs, bins, images, manifests)
 ├── ansible.cfg                          # Ansible configuration (pipelining, SSH settings)
 ├── site.yml                             # Master orchestration playbook
 ├── inventory/
