@@ -1,0 +1,157 @@
+---
+- name: Disable swap immediately
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+
+- name: Remove swap entry from /etc/fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\s+swap\s+.*)$'
+    replace: '# \1'
+
+- name: Load required kernel modules for Kubernetes / k3s
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Persist kernel modules across reboots
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: "0644"
+
+- name: Set sysctl parameters for Kubernetes networking
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-kubernetes-cri.conf
+  loop:
+    - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
+    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { key: "net.ipv4.ip_forward", value: "1" }
+
+- name: Install system prerequisite packages (Debian / Ubuntu)
+  when: ansible_os_family == 'Debian'
+  ansible.builtin.package:
+    name:
+      - curl
+      - wget
+      - git
+      - jq
+      - tar
+      - socat
+      - conntrack
+      - iptables
+    state: present
+    update_cache: true
+
+- name: Install system prerequisite packages and SELinux tools (RHEL / CentOS / Rocky 9)
+  when: ansible_os_family == 'RedHat'
+  block:
+    - name: Install EPEL repository on RHEL if available
+      ansible.builtin.package:
+        name: epel-release
+        state: present
+      failed_when: false
+
+    - name: Install core utilities on RHEL
+      ansible.builtin.package:
+        name:
+          - curl
+          - wget
+          - git
+          - jq
+          - tar
+          - socat
+          - conntrack-tools
+          - iptables
+          - container-selinux
+          - selinux-policy-base
+        state: present
+
+    - name: Add Rancher k3s common repository on RHEL
+      ansible.builtin.yum_repository:
+        name: rancher-k3s-common-stable
+        description: Rancher K3s Common (stable)
+        baseurl: https://rpm.rancher.io/k3s/stable/common/centos/9/noarch
+        enabled: true
+        gpgcheck: true
+        repo_gpgcheck: false
+        gpgkey: https://rpm.rancher.io/public.key
+
+    - name: Install k3s-selinux RPM on RHEL
+      ansible.builtin.package:
+        name: k3s-selinux
+        state: present
+
+    - name: Check if firewalld is active
+      ansible.builtin.command: systemctl is-active firewalld
+      register: firewalld_active
+      failed_when: false
+      changed_when: false
+
+    - name: Configure firewalld rules for k3s cluster on RHEL
+      when: firewalld_active.rc == 0
+      block:
+        - name: Trust pod and service CIDR network blocks
+          ansible.posix.firewalld:
+            zone: trusted
+            source: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: enabled
+          loop:
+            - 10.42.0.0/16
+            - 10.43.0.0/16
+
+        - name: Trust k3s internal CNI network interfaces
+          ansible.posix.firewalld:
+            zone: trusted
+            interface: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: enabled
+          loop:
+            - cni0
+            - flannel.1
+          failed_when: false
+
+        - name: Allow Kubernetes API, Ingress, and Forgejo SSH ports
+          ansible.posix.firewalld:
+            port: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: enabled
+          loop:
+            - 6443/tcp
+            - 80/tcp
+            - 443/tcp
+            - 32222/tcp
+            - 8472/udp
+            - 10250/tcp
+
+- name: Check if Helm is installed
+  ansible.builtin.command: which helm
+  register: helm_check
+  failed_when: false
+  changed_when: false
+
+- name: Install Helm 3 if not present
+  when: helm_check.rc != 0
+  block:
+    - name: Download Helm install script
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get-helm-3.sh
+        mode: "0755"
+
+    - name: Execute Helm install script
+      ansible.builtin.command: /tmp/get-helm-3.sh
+      changed_when: true

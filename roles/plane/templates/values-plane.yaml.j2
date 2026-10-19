@@ -1,0 +1,49 @@
+# Plane Helm Values Configuration (plane.so)
+planeVersion: "{{ plane_version }}"
+
+env:
+  storageClass: "local-path"
+  secretKey: "{{ plane_secret_key }}"
+
+ingress:
+  enabled: true
+  ingressClass: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: "{{ cert_issuer }}"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  appHost: "{{ plane_host }}"
+  tls: true
+  secretName: "plane-tls"
+
+postgresql:
+  auth:
+    username: "{{ plane_db_user }}"
+    password: "{{ plane_db_password }}"
+    database: "{{ plane_db_name }}"
+  primary:
+    persistence:
+      storageClass: "local-path"
+      size: "{{ plane_storage_size }}"
+
+redis:
+  auth:
+    password: "{{ plane_redis_password }}"
+  master:
+    persistence:
+      storageClass: "local-path"
+      size: "5Gi"
+
+minio:
+  rootUser: "{{ plane_minio_access_key }}"
+  rootPassword: "{{ plane_minio_secret_key }}"
+  persistence:
+    storageClass: "local-path"
+    size: "{{ plane_storage_size }}"
+
+rabbitmq:
+  auth:
+    username: "plane"
+    password: "{{ plane_db_password }}"
+  persistence:
+    storageClass: "local-path"
+    size: "5Gi"

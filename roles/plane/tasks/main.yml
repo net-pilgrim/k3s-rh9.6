@@ -1,0 +1,40 @@
+---
+- name: Ensure plane namespace exists
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl create namespace {{ plane_namespace }} --dry-run=client -o yaml
+  register: plane_ns_yaml
+  changed_when: false
+
+- name: Apply plane namespace
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f -
+  args:
+    stdin: "{{ plane_ns_yaml.stdout }}"
+  changed_when: false
+
+- name: Add Plane Helm repository
+  ansible.builtin.command: /usr/local/bin/helm repo add makeplane https://helm.plane.so
+  changed_when: false
+
+- name: Update Helm repositories
+  ansible.builtin.command: /usr/local/bin/helm repo update
+  changed_when: false
+
+- name: Render Plane Helm values
+  ansible.builtin.template:
+    src: values-plane.yaml.j2
+    dest: /tmp/values-plane.yaml
+    mode: "0600"
+
+- name: Deploy or upgrade Plane via Helm
+  ansible.builtin.command: >
+    /usr/local/bin/helm upgrade --install plane-app makeplane/plane-ce
+    --namespace {{ plane_namespace }}
+    -f /tmp/values-plane.yaml
+    --timeout 12m
+  changed_when: true
+
+- name: Wait for Plane API deployment rollout
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl rollout status deployment/plane-api -n {{ plane_namespace }} --timeout=300s
+  failed_when: false
+  changed_when: false

@@ -1,0 +1,72 @@
+---
+- name: Ensure forgejo runner namespace exists
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl create namespace {{ forgejo_runner_namespace }} --dry-run=client -o yaml
+  register: runner_ns_yaml
+  changed_when: false
+
+- name: Apply forgejo runner namespace
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f -
+  args:
+    stdin: "{{ runner_ns_yaml.stdout }}"
+  changed_when: false
+
+- name: Render runner ConfigMap manifest
+  ansible.builtin.template:
+    src: runner-configmap.yaml.j2
+    dest: /tmp/runner-configmap.yaml
+    mode: "0644"
+
+- name: Apply runner ConfigMap
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f /tmp/runner-configmap.yaml
+  changed_when: true
+
+- name: Check if token is explicitly configured
+  ansible.builtin.set_fact:
+    active_runner_token: "{{ forgejo_runner_token }}"
+
+- name: Auto-generate runner token from Forgejo pod if not set
+  when: active_runner_token | length == 0
+  block:
+    - name: Find Forgejo pod name
+      ansible.builtin.shell: |
+        /usr/local/bin/kubectl get pod -n {{ forgejo_namespace }} -l app.kubernetes.io/name=forgejo -o jsonpath='{.items[0].metadata.name}'
+      register: forgejo_pod_name
+      changed_when: false
+
+    - name: Generate registration token inside Forgejo pod
+      ansible.builtin.shell: |
+        /usr/local/bin/kubectl exec -n {{ forgejo_namespace }} {{ forgejo_pod_name.stdout }} -- forgejo forgejo-cli actions generate-runner-token 2>/dev/null || \
+        /usr/local/bin/kubectl exec -n {{ forgejo_namespace }} {{ forgejo_pod_name.stdout }} -- forgejo actions generate-runner-token 2>/dev/null || \
+        /usr/local/bin/kubectl exec -n {{ forgejo_namespace }} {{ forgejo_pod_name.stdout }} -- gitea actions generate-runner-token 2>/dev/null || \
+        echo ""
+      register: generated_token
+      changed_when: false
+
+    - name: Set active runner token fact
+      ansible.builtin.set_fact:
+        active_runner_token: "{{ generated_token.stdout | trim }}"
+      when: generated_token.stdout | trim | length > 0
+
+- name: Create or update runner registration secret
+  ansible.builtin.shell: |
+    /usr/local/bin/kubectl create secret generic forgejo-runner-secret \
+      --namespace {{ forgejo_runner_namespace }} \
+      --from-literal=token="{{ active_runner_token }}" \
+      --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+  changed_when: true
+
+- name: Render runner StatefulSet manifest
+  ansible.builtin.template:
+    src: runner-statefulset.yaml.j2
+    dest: /tmp/runner-statefulset.yaml
+    mode: "0644"
+
+- name: Apply runner StatefulSet
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f /tmp/runner-statefulset.yaml
+  changed_when: true
+
+- name: Wait for Forgejo runner pod to start
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl rollout status statefulset/forgejo-runner -n {{ forgejo_runner_namespace }} --timeout=180s
+  changed_when: false

@@ -1,0 +1,98 @@
+---
+# ==============================================================================
+# Global Cluster & Platform Configuration
+# ==============================================================================
+
+# Target Domain Configuration
+# Change base_domain to your registered domain pointing to your k3s server IP
+base_domain: "cluster.internal"
+
+# Ingress Hostnames
+forgejo_host: "git.{{ base_domain }}"
+plane_host: "plane.{{ base_domain }}"
+itsaplan_web_host: "itsaplan.{{ base_domain }}"
+itsaplan_api_host: "api.itsaplan.{{ base_domain }}"
+
+# TLS / Let's Encrypt Configuration
+# Options: "letsencrypt-prod", "letsencrypt-staging", "selfsigned-issuer"
+cert_issuer: "selfsigned-issuer" # switch to "letsencrypt-prod" once DNS points to the server
+acme_email: "admin@{{ base_domain }}"
+
+# Local kubeconfig copy destination on operator machine
+local_kubeconfig_path: "{{ lookup('env', 'HOME') }}/.kube/k3s-pipeline.yaml"
+
+# ==============================================================================
+# k3s Distribution Configuration
+# ==============================================================================
+k3s_version: "v1.31.5+k3s1"
+k3s_cluster_token: "k3s-secure-token-pipeline-cluster-secret"
+k3s_server_args:
+  - "--write-kubeconfig-mode=644"
+  - "--tls-san={{ base_domain }}"
+  - "--tls-san={{ forgejo_host }}"
+  - "--tls-san={{ plane_host }}"
+  - "--tls-san={{ itsaplan_web_host }}"
+  - "--tls-san={{ itsaplan_api_host }}"
+  - "--disable=servicelb" # Traefik handles HostPort 80/443 directly
+
+# ==============================================================================
+# Feature Flags (Enable/Disable workloads)
+# ==============================================================================
+enable_cert_manager: true
+enable_forgejo: true
+enable_forgejo_runner: true
+enable_plane: true
+enable_itsaplan: true
+
+# ==============================================================================
+# Forgejo & CI/CD Runner Configuration
+# ==============================================================================
+forgejo_namespace: "forgejo"
+forgejo_app_name: "forgejo"
+forgejo_ssh_port: 2222
+forgejo_storage_size: "20Gi"
+
+forgejo_admin_user: "forgejo-admin"
+forgejo_admin_password: "ForgejoSecurePassword123!"
+forgejo_admin_email: "admin@{{ base_domain }}"
+
+# Forgejo Runner (act_runner compatible daemon with DinD)
+forgejo_runner_namespace: "forgejo-runner"
+forgejo_runner_name: "k3s-dind-runner"
+forgejo_runner_capacity: 2
+# Leave empty to let the auto-registration script generate it from Forgejo CLI
+forgejo_runner_token: ""
+
+# ==============================================================================
+# Plane (plane.so) Configuration
+# ==============================================================================
+plane_namespace: "plane"
+plane_version: "v2.6.3"
+plane_db_user: "plane"
+plane_db_password: "PlanePostgresPassword123!"
+plane_db_name: "plane"
+plane_redis_password: "PlaneRedisPassword123!"
+plane_minio_access_key: "plane-access-key"
+plane_minio_secret_key: "PlaneMinioSecret123!"
+plane_secret_key: "plane-secret-key-at-least-32-chars-long!"
+plane_storage_size: "20Gi"
+
+# ==============================================================================
+# It's a Plan (itsaplan.dev) Configuration
+# ==============================================================================
+itsaplan_namespace: "itsaplan"
+itsaplan_version: "latest"
+itsaplan_db_user: "itsaplan"
+itsaplan_db_password: "ItsaPlanPostgresPassword123!"
+itsaplan_db_name: "itsaplan"
+itsaplan_minio_user: "rustfs-admin"
+itsaplan_minio_secret: "RustfsSecureKey123!"
+itsaplan_s3_bucket: "planner-attachments"
+
+# 64-character hex strings for encryption and BetterAuth session keys
+itsaplan_betterauth_secret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+itsaplan_app_encryption_key: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+# AI Integration for It's a Plan (Optional at install time, can be configured in UI)
+itsaplan_ai_provider: "" # "anthropic", "openai", "openrouter", "ollama"
+itsaplan_ai_api_key: ""

@@ -1,0 +1,49 @@
+# Plane Community Edition Helm Values (makeplane/plane-ce)
+planeVersion: "v2.6.3"
+
+env:
+  storageClass: "local-path"
+  secretKey: "plane-super-secret-key-32-chars-long!"
+
+ingress:
+  enabled: true
+  ingressClass: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: "selfsigned-issuer" # Change to letsencrypt-prod for public TLS
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  appHost: "plane.cluster.internal"
+  tls: true
+  secretName: "plane-tls"
+
+postgresql:
+  auth:
+    username: "plane"
+    password: "PlanePostgresPassword123!"
+    database: "plane"
+  primary:
+    persistence:
+      storageClass: "local-path"
+      size: 20Gi
+
+redis:
+  auth:
+    password: "PlaneRedisPassword123!"
+  master:
+    persistence:
+      storageClass: "local-path"
+      size: 5Gi
+
+minio:
+  rootUser: "plane-access-key"
+  rootPassword: "PlaneMinioSecret123!"
+  persistence:
+    storageClass: "local-path"
+    size: 20Gi
+
+rabbitmq:
+  auth:
+    username: "plane"
+    password: "PlanePostgresPassword123!"
+  persistence:
+    storageClass: "local-path"
+    size: 5Gi

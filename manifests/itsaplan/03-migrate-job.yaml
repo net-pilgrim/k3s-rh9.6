@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: itsaplan-db-migrate
+  namespace: itsaplan
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:17-alpine
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for postgres to become ready..."
+              until pg_isready -h itsaplan-postgres -p 5432 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"; do
+                sleep 2
+              done
+              echo "Postgres is ready."
+      containers:
+        - name: migrate
+          image: ghcr.io/croffasia/itsaplan-api:latest
+          command: ["bun", "run", "packages/db/src/migrate.ts"]
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets

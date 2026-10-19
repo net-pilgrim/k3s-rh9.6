@@ -1,0 +1,75 @@
+---
+- name: Ensure /etc/rancher/k3s directory exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+- name: Render k3s configuration file
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: "0600"
+  notify: restart k3s
+
+- name: Check if k3s binary is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Install k3s server
+  when: not k3s_binary.stat.exists
+  ansible.builtin.shell: |
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="{{ k3s_version }}" sh -s - server
+  args:
+    creates: /usr/local/bin/k3s
+
+- name: Ensure k3s service is enabled and running
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+    enabled: true
+
+- name: Wait for k3s API server to be responsive
+  ansible.builtin.command: /usr/local/bin/kubectl get nodes
+  register: kubectl_nodes
+  until: kubectl_nodes.rc == 0
+  retries: 24
+  delay: 5
+  changed_when: false
+
+- name: Wait for node to reach Ready state
+  ansible.builtin.shell: |
+    /usr/local/bin/kubectl get nodes --no-headers | awk '{print $2}'
+  register: node_status
+  until: "'Ready' in node_status.stdout"
+  retries: 20
+  delay: 6
+  changed_when: false
+
+- name: Ensure .kube directory exists in root home
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: "0700"
+
+- name: Symlink k3s.yaml to /root/.kube/config
+  ansible.builtin.file:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /root/.kube/config
+    state: link
+    force: true
+
+- name: Read remote kubeconfig content
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: remote_kubeconfig
+
+- name: Save remote kubeconfig locally with server public IP
+  delegate_to: localhost
+  become: false
+  ansible.builtin.copy:
+    dest: "{{ local_kubeconfig_path }}"
+    content: "{{ remote_kubeconfig.content | b64decode | regex_replace('127\\.0\\.0\\.1', ansible_host) }}"
+    mode: "0600"
+  when: local_kubeconfig_path is defined and local_kubeconfig_path | length > 0

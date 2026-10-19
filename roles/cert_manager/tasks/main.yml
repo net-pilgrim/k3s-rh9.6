@@ -1,0 +1,33 @@
+---
+- name: Add Jetstack Helm repository
+  ansible.builtin.command: /usr/local/bin/helm repo add jetstack https://charts.jetstack.io
+  changed_when: false
+
+- name: Update Helm repositories
+  ansible.builtin.command: /usr/local/bin/helm repo update
+  changed_when: false
+
+- name: Install or upgrade cert-manager via Helm
+  ansible.builtin.command: >
+    /usr/local/bin/helm upgrade --install cert-manager jetstack/cert-manager
+    --namespace cert-manager
+    --create-namespace
+    --set crds.enabled=true
+    --wait
+    --timeout 5m
+  changed_when: true
+
+- name: Wait for cert-manager webhook to be ready
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=120s
+  changed_when: false
+
+- name: Render cluster issuers manifest
+  ansible.builtin.template:
+    src: cluster-issuers.yaml.j2
+    dest: /tmp/cluster-issuers.yaml
+    mode: "0644"
+
+- name: Apply cert-manager ClusterIssuers
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f /tmp/cluster-issuers.yaml
+  changed_when: true

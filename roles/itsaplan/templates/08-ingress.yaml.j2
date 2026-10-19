@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: itsaplan-ingress
+  namespace: {{ itsaplan_namespace }}
+  annotations:
+    cert-manager.io/cluster-issuer: "{{ cert_issuer }}"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - "{{ itsaplan_web_host }}"
+        - "{{ itsaplan_api_host }}"
+      secretName: itsaplan-tls
+  rules:
+    - host: "{{ itsaplan_web_host }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: itsaplan-web
+                port:
+                  number: 3001
+    - host: "{{ itsaplan_api_host }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: itsaplan-api
+                port:
+                  number: 3000

@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itsaplan-bot
+  namespace: itsaplan
+  labels:
+    app: itsaplan-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itsaplan-bot
+  template:
+    metadata:
+      labels:
+        app: itsaplan-bot
+    spec:
+      containers:
+        - name: bot
+          image: ghcr.io/croffasia/itsaplan-bot:latest
+          env:
+            - name: NODE_ENV
+              value: "production"
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets

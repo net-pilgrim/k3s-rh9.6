@@ -1,0 +1,85 @@
+---
+- name: Ensure itsaplan namespace exists
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl create namespace {{ itsaplan_namespace }} --dry-run=client -o yaml
+  register: itsaplan_ns_yaml
+  changed_when: false
+
+- name: Apply itsaplan namespace
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f -
+  args:
+    stdin: "{{ itsaplan_ns_yaml.stdout }}"
+  changed_when: false
+
+- name: Render and apply itsaplan foundation (secrets, postgres, rustfs)
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/tmp/itsaplan-{{ item }}"
+    mode: "0600"
+  loop:
+    - 00-config-secret.yaml
+    - 01-postgres.yaml
+    - 02-rustfs.yaml
+
+- name: Apply foundation manifests
+  ansible.builtin.command: "/usr/local/bin/kubectl apply -f /tmp/itsaplan-{{ item }}"
+  loop:
+    - 00-config-secret.yaml
+    - 01-postgres.yaml
+    - 02-rustfs.yaml
+  changed_when: true
+
+- name: Wait for PostgreSQL StatefulSet to be ready
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl rollout status statefulset/itsaplan-postgres -n {{ itsaplan_namespace }} --timeout=180s
+  changed_when: false
+
+- name: Render and apply database migration job
+  ansible.builtin.template:
+    src: 03-migrate-job.yaml.j2
+    dest: /tmp/itsaplan-03-migrate-job.yaml
+    mode: "0644"
+
+- name: Delete old migration job if finished
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl delete job itsaplan-db-migrate -n {{ itsaplan_namespace }} --ignore-not-found
+  changed_when: false
+
+- name: Apply migration job
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f /tmp/itsaplan-03-migrate-job.yaml
+  changed_when: true
+
+- name: Wait for database migrations to complete
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl wait --for=condition=complete job/itsaplan-db-migrate -n {{ itsaplan_namespace }} --timeout=240s
+  changed_when: false
+
+- name: Render application manifests (api, worker, bot, web, ingress)
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/tmp/itsaplan-{{ item }}"
+    mode: "0644"
+  loop:
+    - 04-api.yaml
+    - 05-worker.yaml
+    - 06-bot.yaml
+    - 07-web.yaml
+    - 08-ingress.yaml
+
+- name: Apply application manifests
+  ansible.builtin.command: "/usr/local/bin/kubectl apply -f /tmp/itsaplan-{{ item }}"
+  loop:
+    - 04-api.yaml
+    - 05-worker.yaml
+    - 06-bot.yaml
+    - 07-web.yaml
+    - 08-ingress.yaml
+  changed_when: true
+
+- name: Wait for Web and API deployments to be available
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl rollout status deployment/{{ item }} -n {{ itsaplan_namespace }} --timeout=180s
+  loop:
+    - itsaplan-api
+    - itsaplan-web
+  changed_when: false

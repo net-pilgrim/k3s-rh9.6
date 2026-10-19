@@ -1,0 +1,58 @@
+# Forgejo Standalone Helm Values (oci://code.forgejo.org/forgejo-helm/forgejo)
+image:
+  rootless: true
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    cert-manager.io/cluster-issuer: "selfsigned-issuer" # Switch to letsencrypt-prod for production
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: "git.cluster.internal"
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: forgejo-tls
+      hosts:
+        - "git.cluster.internal"
+
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+
+service:
+  http:
+    type: ClusterIP
+    port: 3000
+  ssh:
+    type: NodePort
+    port: 22
+    nodePort: 32222
+
+gitea:
+  admin:
+    existingSecret: ""
+    username: "forgejo-admin"
+    password: "ForgejoSecurePassword123!"
+    email: "admin@cluster.internal"
+  config:
+    APP_NAME: "Forgejo DevOps Platform"
+    RUN_MODE: "prod"
+    server:
+      ROOT_URL: "https://git.cluster.internal/"
+      DOMAIN: "git.cluster.internal"
+      SSH_DOMAIN: "git.cluster.internal"
+      SSH_PORT: 32222
+      SSH_LISTEN_PORT: 2222
+    actions:
+      ENABLED: true
+      DEFAULT_ACTIONS_URL: "github"
+    repository:
+      DEFAULT_BRANCH: "main"
+      ENABLE_PUSH_CREATE_USER: true
+      ENABLE_PUSH_CREATE_ORG: true

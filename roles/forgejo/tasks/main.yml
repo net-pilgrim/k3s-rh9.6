@@ -1,0 +1,31 @@
+---
+- name: Ensure forgejo namespace exists
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl create namespace {{ forgejo_namespace }} --dry-run=client -o yaml
+  register: forgejo_ns_yaml
+  changed_when: false
+
+- name: Apply forgejo namespace
+  ansible.builtin.command: /usr/local/bin/kubectl apply -f -
+  args:
+    stdin: "{{ forgejo_ns_yaml.stdout }}"
+  changed_when: false
+
+- name: Render Forgejo Helm values
+  ansible.builtin.template:
+    src: values-forgejo.yaml.j2
+    dest: /tmp/values-forgejo.yaml
+    mode: "0600"
+
+- name: Deploy or upgrade Forgejo via OCI Helm chart
+  ansible.builtin.command: >
+    /usr/local/bin/helm upgrade --install {{ forgejo_app_name }} oci://code.forgejo.org/forgejo-helm/forgejo
+    --namespace {{ forgejo_namespace }}
+    -f /tmp/values-forgejo.yaml
+    --timeout 10m
+  changed_when: true
+
+- name: Wait for Forgejo pod to be ready
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=forgejo -n {{ forgejo_namespace }} --timeout=300s
+  changed_when: false

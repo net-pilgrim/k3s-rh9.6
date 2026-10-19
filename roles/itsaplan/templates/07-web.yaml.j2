@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itsaplan-web
+  namespace: {{ itsaplan_namespace }}
+  labels:
+    app: itsaplan-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itsaplan-web
+  template:
+    metadata:
+      labels:
+        app: itsaplan-web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/croffasia/itsaplan-web:{{ itsaplan_version }}
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3001"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets
+          ports:
+            - containerPort: 3001
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 3001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itsaplan-web
+  namespace: {{ itsaplan_namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3001
+      targetPort: 3001
+      name: http
+  selector:
+    app: itsaplan-web

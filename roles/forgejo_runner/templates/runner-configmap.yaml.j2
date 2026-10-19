@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forgejo-runner-config
+  namespace: {{ forgejo_runner_namespace }}
+data:
+  config.yaml: |
+    log:
+      level: info
+    runner:
+      file: /data/.runner
+      capacity: {{ forgejo_runner_capacity }}
+      timeout: 3h
+      insecure: false
+      fetch_timeout: 5s
+      fetch_interval: 2s
+      labels:
+        - "ubuntu-latest:docker://node:20-bookworm"
+        - "ubuntu-22.04:docker://node:20-bookworm"
+        - "ubuntu-20.04:docker://node:20-bookworm"
+        - "docker:docker://docker:27-cli"
+    cache:
+      enabled: true
+      dir: /data/cache
+    container:
+      network: "host"
+      privileged: true
+      options: "-v /var/run/docker.sock:/var/run/docker.sock"
+      valid_volumes:
+        - "/var/run/docker.sock"

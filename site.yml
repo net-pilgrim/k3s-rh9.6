@@ -1,0 +1,53 @@
+---
+# ==============================================================================
+# Master Playbook: Bootstrap k3s Cluster & Deploy Workload Platform
+# Hosts: Forgejo (Git), Forgejo DinD Runner, Plane.so, It's a Plan
+# ==============================================================================
+
+- name: 1. Prepare Base Nodes (OS, Kernel, Sysctl, Helm)
+  hosts: k3s_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+
+- name: 2. Install & Configure k3s Server
+  hosts: server
+  become: true
+  roles:
+    - role: k3s_server
+
+- name: 3. Join Worker Agents (if configured)
+  hosts: agents
+  become: true
+  roles:
+    - role: k3s_agent
+
+- name: 4. Deploy Kubernetes Infrastructure & Platform Workloads
+  hosts: server
+  become: true
+  tasks:
+    - name: Deploy cert-manager and ClusterIssuers
+      ansible.builtin.include_role:
+        name: cert_manager
+      when: enable_cert_manager | default(true) | bool
+
+    - name: Deploy Forgejo Git Platform
+      ansible.builtin.include_role:
+        name: forgejo
+      when: enable_forgejo | default(true) | bool
+
+    - name: Deploy Forgejo CI/CD Docker-in-Docker Runner
+      ansible.builtin.include_role:
+        name: forgejo_runner
+      when: enable_forgejo_runner | default(true) | bool
+
+    - name: Deploy Plane Management Tooling (plane.so)
+      ansible.builtin.include_role:
+        name: plane
+      when: enable_plane | default(true) | bool
+
+    - name: Deploy It's a Plan Tooling (itsaplan.dev)
+      ansible.builtin.include_role:
+        name: itsaplan
+      when: enable_itsaplan | default(true) | bool

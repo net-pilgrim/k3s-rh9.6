@@ -1,0 +1,21 @@
+# k3s and deployment artifacts
+*.retry
+*.swp
+*.swo
+*~
+.DS_Store
+.venv/
+__pycache__/
+
+# Backups
+backups/
+
+# Local kubeconfig copies with credentials
+kubeconfig
+k3s-pipeline.yaml
+*.kubeconfig
+
+# Sensitive local overrides
+.env
+.env.*
+!.env.example

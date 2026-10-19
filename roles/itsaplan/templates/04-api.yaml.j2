@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itsaplan-api
+  namespace: {{ itsaplan_namespace }}
+  labels:
+    app: itsaplan-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itsaplan-api
+  template:
+    metadata:
+      labels:
+        app: itsaplan-api
+    spec:
+      initContainers:
+        - name: wait-for-migrations
+          image: busybox:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL service..."
+              until nc -z itsaplan-postgres 5432; do
+                sleep 2
+              done
+              echo "Database port is reachable."
+      containers:
+        - name: api
+          image: ghcr.io/croffasia/itsaplan-api:{{ itsaplan_version }}
+          command: ["bun", "run", "apps/api/src/index.ts"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: API_PORT
+              value: "3000"
+            - name: S3_ENDPOINT
+              value: "http://itsaplan-minio:9000"
+            - name: S3_REGION
+              value: "us-east-1"
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets
+          ports:
+            - containerPort: 3000
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itsaplan-api
+  namespace: {{ itsaplan_namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+  selector:
+    app: itsaplan-api

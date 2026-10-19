@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itsaplan-worker
+  namespace: itsaplan
+  labels:
+    app: itsaplan-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itsaplan-worker
+  template:
+    metadata:
+      labels:
+        app: itsaplan-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/croffasia/itsaplan-worker:latest
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: S3_ENDPOINT
+              value: "http://itsaplan-minio:9000"
+            - name: S3_REGION
+              value: "us-east-1"
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets

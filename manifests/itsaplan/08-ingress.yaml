@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: itsaplan-ingress
+  namespace: itsaplan
+  annotations:
+    cert-manager.io/cluster-issuer: "selfsigned-issuer" # Change to letsencrypt-prod for production
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - "itsaplan.cluster.internal"
+        - "api.itsaplan.cluster.internal"
+      secretName: itsaplan-tls
+  rules:
+    - host: "itsaplan.cluster.internal"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: itsaplan-web
+                port:
+                  number: 3001
+    - host: "api.itsaplan.cluster.internal"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: itsaplan-api
+                port:
+                  number: 3000

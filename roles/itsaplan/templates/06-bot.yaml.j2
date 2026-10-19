@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itsaplan-bot
+  namespace: {{ itsaplan_namespace }}
+  labels:
+    app: itsaplan-bot
+spec:
+  # Must stay at 1 replica as long polling binds to a single consumer
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itsaplan-bot
+  template:
+    metadata:
+      labels:
+        app: itsaplan-bot
+    spec:
+      containers:
+        - name: bot
+          image: ghcr.io/croffasia/itsaplan-bot:{{ itsaplan_version }}
+          env:
+            - name: NODE_ENV
+              value: "production"
+          envFrom:
+            - secretRef:
+                name: itsaplan-secrets

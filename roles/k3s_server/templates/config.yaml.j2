@@ -1,0 +1,18 @@
+# /etc/rancher/k3s/config.yaml
+write-kubeconfig-mode: "0644"
+token: "{{ k3s_cluster_token }}"
+tls-san:
+  - "{{ ansible_host }}"
+  - "{{ base_domain }}"
+  - "{{ forgejo_host }}"
+  - "{{ plane_host }}"
+  - "{{ itsaplan_web_host }}"
+  - "{{ itsaplan_api_host }}"
+{% for san in k3s_extra_sans | default([]) %}
+  - "{{ san }}"
+{% endfor %}
+{% if ansible_os_family == 'RedHat' %}
+selinux: true
+{% endif %}
+disable:
+  - servicelb
