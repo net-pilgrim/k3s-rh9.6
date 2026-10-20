@@ -257,9 +257,43 @@ log_success "Forgejo Git server submitted."
 # 4. Deploy Forgejo CI/CD DinD Runner
 # ------------------------------------------------------------------------------
 log_step "[4/6] Deploying Forgejo Actions Runner (with DinD sidecar)..."
+
+log_info "Waiting for Forgejo to be ready to generate runner token..."
+FORGEJO_POD=""
+for i in $(seq 1 45); do
+    FORGEJO_POD=$(kubectl get pods -n forgejo -l app.kubernetes.io/name=forgejo -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
+    if [ -n "$FORGEJO_POD" ]; then
+        READY=$(kubectl get pod -n forgejo "$FORGEJO_POD" -o jsonpath="{.status.containerStatuses[0].ready}" 2>/dev/null || true)
+        if [ "$READY" = "true" ]; then
+            break
+        fi
+    fi
+    sleep 2
+done
+
+RUNNER_TOKEN=""
+if [ -n "$FORGEJO_POD" ]; then
+    log_info "Generating Actions Runner token from Forgejo CLI..."
+    for i in $(seq 1 15); do
+        RUNNER_TOKEN=$(kubectl exec -n forgejo "$FORGEJO_POD" -c forgejo -- gitea actions generate-runner-token 2>/dev/null || \
+                      kubectl exec -n forgejo "$FORGEJO_POD" -c forgejo -- forgejo actions generate-runner-token 2>/dev/null || true)
+        RUNNER_TOKEN=$(echo "$RUNNER_TOKEN" | tr -d "[:space:]")
+        if [ -n "$RUNNER_TOKEN" ]; then
+            log_success "Obtained real Actions Runner registration token."
+            break
+        fi
+        sleep 2
+    done
+fi
+
+if [ -z "$RUNNER_TOKEN" ]; then
+    log_warn "Could not fetch runner token from Forgejo yet; using bootstrap placeholder."
+    RUNNER_TOKEN="initial-bootstrap-token"
+fi
+
 kubectl create secret generic forgejo-runner-secret \
     --namespace forgejo-runner \
-    --from-literal=token="initial-bootstrap-token" \
+    --from-literal=token="${RUNNER_TOKEN}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 apply_manifest "H4sIAAAAAAAC/81X3W/bNhB/91/BaMWeKslxWgxQgQJF4nRZEztQ0vWhKwyaOtucJVITKSdemv99R31FkunE3cOwvEQm73483v3ugzTlv0OmuBQB2RwP1lxEATmVYsGXVzQdJKBpRDUNBoQImkBAFjJbwp/SzXIhIHNZIVrtqpSyHZFBrV+KeluaxAH5jguExHIZFB/4CRvAdS4WslgplevdBY8R2DdQvlfhljuM4qFcbwMyqlY0T0DmOiAnq2qFCwUsz4xpNFZQY4Jmq1kj/VZ11rnQkG0omjSqN2I6h1jVJhHiEief50Lnbkw1KB1Ekq3RZt8XMoJgNHTnUq7vZJY4Fp3RyBu++UGV4eEqlVQjXH2MfnFZzEtJRtkK6uuAoPMYMPg6y2sPRTyrnV7IllpSaMpbsRGg8fR1QJyVVLo2Is34BoO27EHKVCPXFAq7G+JvaOZjNCvjPIX/AttiDYrx4NFsI+McydYJhF3Ldd0BbTGcpqnyG5rfaAzbIo9vQL9I9GcZ3qUGHrIjoVJgZjeDNOaM4v2P8ZdChnEGE/t5CmJgWlZ+Tiiy8rLDQNtBSH9IUsPHSq11LxuH7Rh4eGVwJ+ItvZ/IWeFolwu3/CKKR8BoZtAI3GPCaS6WT8qEsiL0raiVjo4wGM0iJmtCl2a14att/zqP42uJrsS8v1hMpL7OQIHQLbki5bEwYDHTcK+D1tZedpaJsOnK1naeTU8/jcPZ7eXN7HQc3p5dhB2xgp05yjlOa73k6pXE/FV22PKiriEs6B5iYvSuqV4FTa7YMdBFrkKuoGtegIj5vMqRQSuY5yUDSFgwgEQUEimeYrcTs04JbkWNYUnyKjp5+M+vvv2qnL/xht7xvwgmk0lCMWd7t/fnXPhq1Vt1WW/he88nwFaSOF8oLxhq+FpRuLq3lmQOeCRgvqoUOcs34Hme04O5WyGFyFEVwaJ1kfd+BBtf4I3I6P3Px+9ws6eFzIwB0qZd1X+RFGC1s2sbV2gUjbZHzqAnzRfkK1rjLrp9knx7R/QKxI4ZJXoIS66w1RlPVAp3XK8aRlBNXj2cT8OP49+ms4vJze2Hyel49jm8fLR4pDLC/Zs4rx7Cz5OJyZfpp/Hk0dlrRm3IOAynYUDaWuayWM309ohcx0CViUdprYGqzcXwpTLNTc0rljHxM9AW22rPnwxtRtxzTY53NhZ8d6lTLZ9M+sOC6rpCusUoYarfBvYI4YCiqWBg3Gb1tbNHUcs1CIuz99iCudsSnny4Gu+VLRvFwRPO68OmmtcHjCUWjpaeVjljoBR27HjbuB2io74aPM14faRzrIaRibXSLcKXWBk1/QnTuJs/fXRkhDVNcZrI6nrS5keZt5ZkMT3SLozuL4dl4uMs6ndl/NYc/QNt69fpze2efpULfo+heG7w6kLaKLoHe6V1itj1FczPpj+oDfNYnJsoerFkOGufDIdD+5Etyu45aX2iilHBtYWtB1OkiQ3nPJNJsFuwi4ryCbYhLAJLtlhfRqWSRXoN2OeKxP3P54TKNEPvZxB2tnvqzZtvH8DBpC2cm89LtV0Ry6D/vC+KZnFmXi0Pj4NDrWf1a7fr9+efu6VppzHlyW01cFd2ujszN9nr/faUjbN4Ud6usGTi++ArdmYafcEJFqbYGZxvjVg15+HZSpVPB6fIHjdFNz7RHkcXmWcMOnTK4K8c63iPYhUivoE/8hfuYJk0/2+XGA3xFv8AB5LwF9gQAAA="
