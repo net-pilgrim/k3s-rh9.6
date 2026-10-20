@@ -22,3 +22,8 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: itsaplan
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vaultwarden

@@ -225,7 +225,7 @@ log_info "Master Pass:   ${ADMIN_PASS}"
 
 # Ensure target namespaces exist
 log_info "Creating target namespaces..."
-for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
+for ns in cert-manager forgejo forgejo-runner plane itsaplan vaultwarden; do
     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 done
 
@@ -371,6 +371,134 @@ apply_manifest "H4sIAAAAAAAC/91abXPaRhD+zq+4qv3Y46XEfVE/ORi7NDEwgJN22gxzEgfccNIp
 log_success "It's a Plan submitted."
 
 # ------------------------------------------------------------------------------
+# 7. Deploy Vaultwarden (Secrets & Password Manager)
+# ------------------------------------------------------------------------------
+log_step "[7/7] Deploying Vaultwarden Team Secrets Manager..."
+cat << EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vaultwarden-secret
+  namespace: vaultwarden
+type: Opaque
+stringData:
+  ADMIN_TOKEN: "${ADMIN_PASS}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vaultwarden-config
+  namespace: vaultwarden
+data:
+  DOMAIN: "https://vault.${DOMAIN}"
+  SIGNUPS_ALLOWED: "true"
+  INVITATIONS_ALLOWED: "true"
+  WEBSOCKET_ENABLED: "true"
+  ROCKET_PORT: "80"
+  SHOW_PASSWORD_HINT: "false"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vaultwarden-data
+  namespace: vaultwarden
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vaultwarden
+  namespace: vaultwarden
+  labels:
+    app: vaultwarden
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vaultwarden
+  template:
+    metadata:
+      labels:
+        app: vaultwarden
+    spec:
+      containers:
+        - name: vaultwarden
+          image: vaultwarden/server:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: vaultwarden-config
+            - secretRef:
+                name: vaultwarden-secret
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: vaultwarden-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaultwarden
+  namespace: vaultwarden
+spec:
+  type: ClusterIP
+  selector:
+    app: vaultwarden
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vaultwarden
+  namespace: vaultwarden
+  annotations:
+    cert-manager.io/cluster-issuer: "${CERT_ISSUER}"
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - "vault.${DOMAIN}"
+      secretName: vaultwarden-tls
+  rules:
+    - host: "vault.${DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vaultwarden
+                port:
+                  number: 80
+EOF
+log_success "Vaultwarden submitted."
+
+# ------------------------------------------------------------------------------
 # Verification & Live Status Check
 # ------------------------------------------------------------------------------
 echo ""
@@ -379,7 +507,7 @@ echo -e "${BLUE}${BOLD}              🎉 ALL WORKLOADS SUBMITTED TO KUBERNETES!
 echo -e "${BLUE}${BOLD}==============================================================================${NC}\n"
 
 log_info "Force-refreshing any pods previously stuck in ImagePullBackOff..."
-for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
+for ns in cert-manager forgejo forgejo-runner plane itsaplan vaultwarden; do
     FAILED_PODS=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -E "(ImagePullBackOff|ErrImagePull|Init:ImagePullBackOff|Init:ErrImagePull|CrashLoopBackOff|Error)" | awk '{print $1}' || true)
     if [ -n "${FAILED_PODS}" ]; then
         log_info "Restarting stuck pods in '${ns}': ${FAILED_PODS}"
@@ -391,7 +519,7 @@ log_info "Waiting 10 seconds for initial container initialization..."
 sleep 10
 
 echo ""
-for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
+for ns in cert-manager forgejo forgejo-runner plane itsaplan vaultwarden; do
     echo -e "${CYAN}${BOLD}=== Namespace: ${ns} ===${NC}"
     kubectl get pods -n "$ns" -o wide || true
     echo ""
@@ -418,4 +546,9 @@ echo -e "    First-Time Setup:   Click 'Sign Up' to register on first visit"
 echo -e "    API Endpoint:       https://api.itsaplan.${DOMAIN}"
 echo -e "    Suggested Email:    admin@${DOMAIN}"
 echo -e "    Suggested Password: ${ADMIN_PASS}"
+echo ""
+echo -e " 🔐 ${BOLD}Vaultwarden:${NC}        https://vault.${DOMAIN}"
+echo -e "    Admin Portal:       https://vault.${DOMAIN}/admin"
+echo -e "    Admin Token:        ${ADMIN_PASS}"
+echo -e "    First-Time Setup:   Click 'Create Account' to start team password vault"
 echo -e "${GREEN}${BOLD}==============================================================================${NC}\n"

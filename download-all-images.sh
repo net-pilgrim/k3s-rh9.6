@@ -198,6 +198,10 @@ IMAGES = [
     "docker.io/pgsty/mc:RELEASE.2026-09-16T00-00-00Z",
     "redis:7-alpine",
     "rabbitmq:3-management-alpine",
+
+    # --- Vaultwarden (Secrets & Password Manager) ---
+    "vaultwarden/server:latest",
+    "vaultwarden/server:1.33.2",
 ]
 
 def get_tag_aliases(image_name):

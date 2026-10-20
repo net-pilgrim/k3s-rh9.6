@@ -48,6 +48,7 @@ UNINSTALL_FORGEJO=false
 UNINSTALL_RUNNER=false
 UNINSTALL_PLANE=false
 UNINSTALL_ITSAPLAN=false
+UNINSTALL_VAULTWARDEN=false
 UNINSTALL_CERT_MANAGER=false
 SPECIFIC_TARGET=false
 
@@ -60,6 +61,7 @@ while [[ $# -gt 0 ]]; do
             UNINSTALL_RUNNER=true
             UNINSTALL_PLANE=true
             UNINSTALL_ITSAPLAN=true
+            UNINSTALL_VAULTWARDEN=true
             UNINSTALL_CERT_MANAGER=true
             SPECIFIC_TARGET=true
             shift ;;
@@ -78,6 +80,10 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --itsaplan)
             UNINSTALL_ITSAPLAN=true
+            SPECIFIC_TARGET=true
+            shift ;;
+        --vaultwarden)
+            UNINSTALL_VAULTWARDEN=true
             SPECIFIC_TARGET=true
             shift ;;
         --cert-manager)
@@ -121,6 +127,7 @@ if [ "$SPECIFIC_TARGET" = false ]; then
     UNINSTALL_RUNNER=true
     UNINSTALL_PLANE=true
     UNINSTALL_ITSAPLAN=true
+    UNINSTALL_VAULTWARDEN=true
 fi
 
 echo -e "${RED}${BOLD}"
@@ -169,6 +176,7 @@ echo -e "${BOLD}Target Components to Uninstall:${NC}"
 [ "$UNINSTALL_FORGEJO" = true ] && echo -e "  - ${CYAN}Forgejo Git Forge${NC} (namespace: forgejo)"
 [ "$UNINSTALL_RUNNER" = true ] && echo -e "  - ${CYAN}Forgejo Actions DinD Runner${NC} (namespace: forgejo-runner)"
 [ "$UNINSTALL_ITSAPLAN" = true ] && echo -e "  - ${CYAN}It's a Plan Issue Tracker${NC} (namespace: itsaplan)"
+[ "$UNINSTALL_VAULTWARDEN" = true ] && echo -e "  - ${CYAN}Vaultwarden Secrets Manager${NC} (namespace: vaultwarden)"
 [ "$UNINSTALL_CERT_MANAGER" = true ] && echo -e "  - ${CYAN}cert-manager & TLS ClusterIssuers${NC} (namespace: cert-manager)"
 
 if [ "$PURGE_DATA" = true ]; then
@@ -287,7 +295,14 @@ if [ "$UNINSTALL_FORGEJO" = true ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Uninstall cert-manager & ClusterIssuers (if requested)
+# 5. Uninstall Vaultwarden
+# ------------------------------------------------------------------------------
+if [ "$UNINSTALL_VAULTWARDEN" = true ]; then
+    clean_namespace "vaultwarden" "Vaultwarden Team Secrets Manager"
+fi
+
+# ------------------------------------------------------------------------------
+# 6. Uninstall cert-manager & ClusterIssuers (if requested)
 # ------------------------------------------------------------------------------
 if [ "$UNINSTALL_CERT_MANAGER" = true ]; then
     log_step "Uninstalling cert-manager & TLS ClusterIssuers..."
