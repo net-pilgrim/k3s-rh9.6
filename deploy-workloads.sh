@@ -470,31 +470,36 @@ spec:
       port: 80
       targetPort: 80
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vaultwarden-tls
+  namespace: vaultwarden
+spec:
+  secretName: vaultwarden-tls
+  issuerRef:
+    name: "${CERT_ISSUER}"
+    kind: ClusterIssuer
+  dnsNames:
+    - "vault.${DOMAIN}"
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
 metadata:
   name: vaultwarden
   namespace: vaultwarden
-  annotations:
-    cert-manager.io/cluster-issuer: "${CERT_ISSUER}"
-    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
 spec:
-  ingressClassName: traefik
+  entryPoints:
+    - web
+    - websecure
+  routes:
+    - match: Host(`vault.${DOMAIN}`) && PathPrefix(`/`)
+      kind: Rule
+      services:
+        - name: vaultwarden
+          port: 80
   tls:
-    - hosts:
-        - "vault.${DOMAIN}"
-      secretName: vaultwarden-tls
-  rules:
-    - host: "vault.${DOMAIN}"
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: vaultwarden
-                port:
-                  number: 80
+    secretName: vaultwarden-tls
 EOF
 log_success "Vaultwarden submitted."
 
