@@ -85,9 +85,12 @@ RUNNER_TOKEN="$MANUAL_TOKEN"
 if [ -z "$RUNNER_TOKEN" ]; then
     log_step "Querying Forgejo CLI for instance registration token..."
     for i in $(seq 1 15); do
-        RUNNER_TOKEN=$(kubectl exec -n forgejo "$FORGEJO_POD" -c forgejo -- gitea actions generate-runner-token 2>/dev/null || \
-                      kubectl exec -n forgejo "$FORGEJO_POD" -c forgejo -- forgejo actions generate-runner-token 2>/dev/null || true)
-        RUNNER_TOKEN=$(echo "$RUNNER_TOKEN" | tr -d '[:space:]')
+        RAW_TOKEN=$(kubectl exec -n forgejo "$FORGEJO_POD" -c forgejo -- gitea actions generate-runner-token 2>/dev/null || \
+                    kubectl exec -n forgejo "$FORGEJO_POD" -c forgejo -- forgejo actions generate-runner-token 2>/dev/null || true)
+        RUNNER_TOKEN=$(echo "$RAW_TOKEN" | grep -E '^[a-zA-Z0-9]{30,}' | tail -n 1 || true)
+        if [ -z "$RUNNER_TOKEN" ]; then
+            RUNNER_TOKEN=$(echo "$RAW_TOKEN" | tail -n 1 | tr -d '[:space:]')
+        fi
         if [ -n "$RUNNER_TOKEN" ]; then
             break
         fi
@@ -128,7 +131,7 @@ data:
       file: /data/.runner
       capacity: 2
       timeout: 3h
-      insecure: false
+      insecure: true
       fetch_timeout: 5s
       fetch_interval: 2s
       labels:
@@ -178,12 +181,14 @@ spec:
         - name: runner
           image: code.forgejo.org/forgejo/runner:4.0.1
           imagePullPolicy: IfNotPresent
+          workingDir: /data
           securityContext:
             runAsUser: 0
           command:
             - /bin/sh
             - -c
             - |
+              cd /data
               echo "Waiting for Docker daemon on 127.0.0.1:2375..."
               for i in $(seq 1 30); do
                 if wget -q -O - http://127.0.0.1:2375/_ping >/dev/null 2>&1 || \
@@ -195,24 +200,49 @@ spec:
                 sleep 1
               done
 
-              if [ ! -f /data/.runner ]; then
+              echo "Testing Forgejo connectivity at ${FORGEJO_INSTANCE_URL}..."
+              wget -q -O - "${FORGEJO_INSTANCE_URL}/api/v1/version" || echo "(Forgejo API probe returned non-200, proceeding with registration...)"
+
+              if [ ! -f /data/.runner ] && [ ! -f .runner ] && [ ! -f /.runner ]; then
                 echo "Registering runner with Forgejo at ${FORGEJO_INSTANCE_URL}..."
                 if [ -z "${RUNNER_TOKEN}" ]; then
                   echo "ERROR: RUNNER_TOKEN is empty! Please register the runner or populate the secret."
                   sleep 30
                   exit 1
                 fi
-                forgejo-runner register \
+                if ! forgejo-runner register \
+                  --config /etc/forgejo-runner/config.yaml \
                   --no-interactive \
                   --instance "${FORGEJO_INSTANCE_URL}" \
                   --token "${RUNNER_TOKEN}" \
                   --name "${RUNNER_NAME}" \
-                  --labels "ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm,docker:docker://docker:27-cli"
-                echo "Runner successfully registered!"
-              else
-                echo "Found existing runner registration in /data/.runner"
+                  --labels "ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm,docker:docker://docker:27-cli"; then
+                  echo "ERROR: forgejo-runner register with config failed! Retrying directly in /data..."
+                  forgejo-runner register \
+                    --no-interactive \
+                    --instance "${FORGEJO_INSTANCE_URL}" \
+                    --token "${RUNNER_TOKEN}" \
+                    --name "${RUNNER_NAME}" \
+                    --labels "ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm,docker:docker://docker:27-cli" || true
+                fi
               fi
 
+              # Ensure .runner is placed in /data/.runner
+              if [ -f .runner ] && [ ! -f /data/.runner ]; then
+                cp .runner /data/.runner
+              elif [ -f /.runner ] && [ ! -f /data/.runner ]; then
+                cp /.runner /data/.runner
+              fi
+
+              if [ ! -f /data/.runner ]; then
+                echo "CRITICAL: /data/.runner still does not exist! Registration failed."
+                echo "Listing directory contents:"
+                ls -la /data /
+                sleep 30
+                exit 1
+              fi
+
+              echo "Runner registration confirmed in /data/.runner."
               echo "Starting forgejo-runner daemon..."
               exec forgejo-runner daemon --config /etc/forgejo-runner/config.yaml
           env:
