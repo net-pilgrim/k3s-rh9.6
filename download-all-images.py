@@ -204,11 +204,13 @@ def download_image(image_name, out_tar):
             manifest = json.loads(r.read().decode('utf-8'))
 
     config_digest = manifest['config']['digest']
+    config_hash = config_digest.split(':')[1] if ':' in config_digest else config_digest
+    config_fname = f"{config_hash}.json"
     work_dir = tempfile.mkdtemp(prefix="img-build-")
 
     try:
         # Download config JSON
-        config_path = os.path.join(work_dir, config_digest)
+        config_path = os.path.join(work_dir, config_fname)
         config_url = f"https://{reg}/v2/{repo}/blobs/{config_digest}"
         download_stream(config_url, headers, config_path)
 
@@ -225,7 +227,7 @@ def download_image(image_name, out_tar):
 
         # Write manifest.json
         manifest_data = [{
-            'Config': config_digest,
+            'Config': config_fname,
             'RepoTags': get_tag_aliases(image_name),
             'Layers': [fname for fname, _ in layer_files]
         }]
@@ -236,7 +238,7 @@ def download_image(image_name, out_tar):
         # Build final tar
         tmp_tar = out_tar + ".part"
         with tarfile.open(tmp_tar, 'w') as t:
-            t.add(config_path, arcname=config_digest)
+            t.add(config_path, arcname=config_fname)
             for fname, lpath in layer_files:
                 t.add(lpath, arcname=fname)
             t.add(manifest_path, arcname="manifest.json")
@@ -246,26 +248,51 @@ def download_image(image_name, out_tar):
         shutil.rmtree(work_dir, ignore_errors=True)
 
 def main():
-    target_dir = sys.argv[1] if len(sys.argv) > 1 else "./workload-images"
+    target_dir = "./workload-images"
+    filter_pattern = os.environ.get("IMAGE_FILTER", "")
+
+    for arg in sys.argv[1:]:
+        if arg in ("--plane-only", "-p"):
+            filter_pattern = "plane"
+        elif arg.startswith("--filter="):
+            filter_pattern = arg.split("=", 1)[1]
+        elif not arg.startswith("-"):
+            target_dir = arg
+
     os.makedirs(target_dir, exist_ok=True)
 
-    print(f"\n==> Fetching {len(IMAGES)} workload images (Strict TLS 1.2 Engine)...")
+    if filter_pattern.lower() in ("plane", "plane-only"):
+        images_to_fetch = [
+            "makeplane/plane-backend:v1.4.2",
+            "makeplane/plane-frontend:v1.4.2",
+            "makeplane/plane-admin:v1.4.2",
+            "makeplane/plane-space:v1.4.2",
+            "makeplane/plane-live:v1.4.2",
+        ]
+        print(f"\n==> Filter active: Downloading {len(images_to_fetch)} Plane images only.")
+    elif filter_pattern:
+        images_to_fetch = [img for img in IMAGES if filter_pattern.lower() in img.lower()]
+        print(f"\n==> Filter active ('{filter_pattern}'): {len(images_to_fetch)} of {len(IMAGES)} images selected.")
+    else:
+        images_to_fetch = IMAGES
+
+    print(f"\n==> Fetching {len(images_to_fetch)} workload images (Strict TLS 1.2 Engine)...")
     print(f"==> Target Directory: {os.path.abspath(target_dir)}\n")
 
     success_count = 0
     fail_count = 0
 
-    for idx, img in enumerate(IMAGES, 1):
+    for idx, img in enumerate(images_to_fetch, 1):
         safe_name = img.replace('/', '_').replace(':', '_') + ".tar"
         out_tar = os.path.join(target_dir, safe_name)
 
         if os.path.isfile(out_tar) and os.path.getsize(out_tar) > 1024:
             size_mb = os.path.getsize(out_tar) / (1024 * 1024)
-            print(f"[{idx}/{len(IMAGES)}] ✔ Cached: {img} ({size_mb:.1f} MB)")
+            print(f"[{idx}/{len(images_to_fetch)}] ✔ Cached: {img} ({size_mb:.1f} MB)")
             success_count += 1
             continue
 
-        print(f"[{idx}/{len(IMAGES)}] Downloading: {img} ...", flush=True)
+        print(f"[{idx}/{len(images_to_fetch)}] Downloading: {img} ...", flush=True)
         try:
             download_image(img, out_tar)
             size_mb = os.path.getsize(out_tar) / (1024 * 1024)

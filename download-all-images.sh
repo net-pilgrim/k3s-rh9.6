@@ -40,6 +40,7 @@ log_error() { echo -e "${RED}   ✖ ERROR: ${NC}$1" >&2; }
 OUTPUT_DIR="${SCRIPT_DIR}/workload-images"
 DO_IMPORT=false
 DO_ARCHIVE=false
+FILTER_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,6 +48,12 @@ while [[ $# -gt 0 ]]; do
             DO_IMPORT=true; shift ;;
         --archive)
             DO_ARCHIVE=true; shift ;;
+        -p|--plane-only)
+            FILTER_ARG="--plane-only"; shift ;;
+        --filter)
+            FILTER_ARG="--filter=$2"; shift 2 ;;
+        --filter=*)
+            FILTER_ARG="$1"; shift ;;
         -o|--output)
             OUTPUT_DIR="$2"; shift 2 ;;
         -h|--help)
@@ -54,8 +61,10 @@ while [[ $# -gt 0 ]]; do
 Usage: ./download-all-images.sh [OPTIONS]
 
 Options:
+  -p, --plane-only   Download only Plane CE images (makeplane/plane-*:v1.4.2)
+  --filter <STR>     Filter images to download matching pattern
   --import           Automatically import images into local k3s containerd
-  --archive          Create compressed workload-images.tar.gz for transfer
+  --archive          Create compressed image archive for air-gap transfer
   -o, --output <DIR> Directory to save image tar files (default: ./workload-images)
   -h, --help         Show this help message and exit
 EOF
@@ -122,7 +131,7 @@ done
 
 if [ -n "${PYTHON_BIN}" ]; then
     log_info "Executing Python TLS 1.2 download engine (${PYTHON_BIN})..."
-    "${PYTHON_BIN}" - "${OUTPUT_DIR}" << 'PYEOF'
+    "${PYTHON_BIN}" - "${OUTPUT_DIR}" "${FILTER_ARG}" << 'PYEOF'
 #!/usr/bin/env python3
 """
 High-Performance OCI/Docker Container Image Downloader with Strict TLS 1.2
@@ -329,11 +338,13 @@ def download_image(image_name, out_tar):
             manifest = json.loads(r.read().decode('utf-8'))
 
     config_digest = manifest['config']['digest']
+    config_hash = config_digest.split(':')[1] if ':' in config_digest else config_digest
+    config_fname = f"{config_hash}.json"
     work_dir = tempfile.mkdtemp(prefix="img-build-")
 
     try:
         # Download config JSON
-        config_path = os.path.join(work_dir, config_digest)
+        config_path = os.path.join(work_dir, config_fname)
         config_url = f"https://{reg}/v2/{repo}/blobs/{config_digest}"
         download_stream(config_url, headers, config_path)
 
@@ -350,7 +361,7 @@ def download_image(image_name, out_tar):
 
         # Write manifest.json
         manifest_data = [{
-            'Config': config_digest,
+            'Config': config_fname,
             'RepoTags': get_tag_aliases(image_name),
             'Layers': [fname for fname, _ in layer_files]
         }]
@@ -361,7 +372,7 @@ def download_image(image_name, out_tar):
         # Build final tar
         tmp_tar = out_tar + ".part"
         with tarfile.open(tmp_tar, 'w') as t:
-            t.add(config_path, arcname=config_digest)
+            t.add(config_path, arcname=config_fname)
             for fname, lpath in layer_files:
                 t.add(lpath, arcname=fname)
             t.add(manifest_path, arcname="manifest.json")
@@ -371,26 +382,51 @@ def download_image(image_name, out_tar):
         shutil.rmtree(work_dir, ignore_errors=True)
 
 def main():
-    target_dir = sys.argv[1] if len(sys.argv) > 1 else "./workload-images"
+    target_dir = "./workload-images"
+    filter_pattern = os.environ.get("IMAGE_FILTER", "")
+
+    for arg in sys.argv[1:]:
+        if arg in ("--plane-only", "-p"):
+            filter_pattern = "plane"
+        elif arg.startswith("--filter="):
+            filter_pattern = arg.split("=", 1)[1]
+        elif not arg.startswith("-"):
+            target_dir = arg
+
     os.makedirs(target_dir, exist_ok=True)
 
-    print(f"\n==> Fetching {len(IMAGES)} workload images (Strict TLS 1.2 Engine)...")
+    if filter_pattern.lower() in ("plane", "plane-only"):
+        images_to_fetch = [
+            "makeplane/plane-backend:v1.4.2",
+            "makeplane/plane-frontend:v1.4.2",
+            "makeplane/plane-admin:v1.4.2",
+            "makeplane/plane-space:v1.4.2",
+            "makeplane/plane-live:v1.4.2",
+        ]
+        print(f"\n==> Filter active: Downloading {len(images_to_fetch)} Plane images only.")
+    elif filter_pattern:
+        images_to_fetch = [img for img in IMAGES if filter_pattern.lower() in img.lower()]
+        print(f"\n==> Filter active ('{filter_pattern}'): {len(images_to_fetch)} of {len(IMAGES)} images selected.")
+    else:
+        images_to_fetch = IMAGES
+
+    print(f"\n==> Fetching {len(images_to_fetch)} workload images (Strict TLS 1.2 Engine)...")
     print(f"==> Target Directory: {os.path.abspath(target_dir)}\n")
 
     success_count = 0
     fail_count = 0
 
-    for idx, img in enumerate(IMAGES, 1):
+    for idx, img in enumerate(images_to_fetch, 1):
         safe_name = img.replace('/', '_').replace(':', '_') + ".tar"
         out_tar = os.path.join(target_dir, safe_name)
 
         if os.path.isfile(out_tar) and os.path.getsize(out_tar) > 1024:
             size_mb = os.path.getsize(out_tar) / (1024 * 1024)
-            print(f"[{idx}/{len(IMAGES)}] ✔ Cached: {img} ({size_mb:.1f} MB)")
+            print(f"[{idx}/{len(images_to_fetch)}] ✔ Cached: {img} ({size_mb:.1f} MB)")
             success_count += 1
             continue
 
-        print(f"[{idx}/{len(IMAGES)}] Downloading: {img} ...", flush=True)
+        print(f"[{idx}/{len(images_to_fetch)}] Downloading: {img} ...", flush=True)
         try:
             download_image(img, out_tar)
             size_mb = os.path.getsize(out_tar) / (1024 * 1024)
@@ -408,7 +444,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 PYEOF
 else
     log_error "Python 3 is required for the TLS 1.2 download engine but was not found!"
@@ -430,7 +465,7 @@ if [ "$DO_IMPORT" = true ] || ([ "${EUID:-$(id -u)}" -eq 0 ] && [ -x /usr/local/
             NAME=$(basename "${tarfile}")
             log_info "Importing ${NAME}..."
             cp -n "${tarfile}" /var/lib/rancher/k3s/agent/images/ 2>/dev/null || true
-            "${K3S_CMD}" ctr images import "${tarfile}" >/dev/null 2>&1 || true
+            "${K3S_CMD}" ctr -n k8s.io images import "${tarfile}" >/dev/null 2>&1 || true
         fi
     done
 
@@ -438,7 +473,7 @@ if [ "$DO_IMPORT" = true ] || ([ "${EUID:-$(id -u)}" -eq 0 ] && [ -x /usr/local/
     log_info "Restarting stuck pods across namespaces..."
     export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
     for ns in cert-manager forgejo forgejo-runner plane itsaplan; do
-        FAILED=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -E "(ImagePullBackOff|ErrImagePull)" | awk '{print $1}' || true)
+        FAILED=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -E "(ImagePullBackOff|ErrImagePull|Init:ImagePullBackOff|Init:ErrImagePull|CrashLoopBackOff|Error)" | awk '{print $1}' || true)
         if [ -n "$FAILED" ]; then
             echo "$FAILED" | xargs kubectl delete pod -n "$ns" --grace-period=0 --force >/dev/null 2>&1 || true
         fi
@@ -447,8 +482,13 @@ if [ "$DO_IMPORT" = true ] || ([ "${EUID:-$(id -u)}" -eq 0 ] && [ -x /usr/local/
     log_success "All images imported into containerd. Pods are running!"
 elif [ "$DO_ARCHIVE" = true ]; then
     log_step "[3/3] Creating Compressed Archive workload-images.tar.gz..."
-    ARCHIVE_FILE="${SCRIPT_DIR}/workload-images.tar.gz"
-    tar -czf "${ARCHIVE_FILE}" -C "${SCRIPT_DIR}" "$(basename "${OUTPUT_DIR}")"
+    if [ "${FILTER_ARG}" = "--plane-only" ]; then
+        ARCHIVE_FILE="${SCRIPT_DIR}/plane-images.tar.gz"
+    else
+        ARCHIVE_FILE="${SCRIPT_DIR}/workload-images.tar.gz"
+    fi
+    log_step "[3/3] Creating Compressed Archive $(basename "${ARCHIVE_FILE}")..."
+    tar -czf "${ARCHIVE_FILE}" -C "$(dirname "${OUTPUT_DIR}")" "$(basename "${OUTPUT_DIR}")"
     log_success "Air-gap transfer bundle created: ${ARCHIVE_FILE} ($(du -h "${ARCHIVE_FILE}" | awk '{print $1}'))"
     echo ""
     echo "To install on your air-gapped machine:"
