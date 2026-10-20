@@ -27,8 +27,6 @@ spec:
             - name: DOCKER_TLS_CERTDIR
               value: ""
           volumeMounts:
-            - name: docker-socket
-              mountPath: /var/run
             - name: dind-storage
               mountPath: /var/lib/docker
 
@@ -36,15 +34,22 @@ spec:
         - name: runner
           image: code.forgejo.org/forgejo/runner:4.0.1
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
           command:
             - /bin/sh
             - -c
             - |
-              echo "Waiting for Docker daemon to become responsive..."
-              while ! docker info >/dev/null 2>&1; do
-                sleep 2
+              echo "Waiting for Docker daemon on 127.0.0.1:2375..."
+              for i in $(seq 1 30); do
+                if wget -q -O - http://127.0.0.1:2375/_ping >/dev/null 2>&1 || \
+                   wget -q -O - http://localhost:2375/_ping >/dev/null 2>&1 || \
+                   nc -z 127.0.0.1 2375 2>/dev/null; then
+                  echo "Docker daemon verified ready on TCP port 2375!"
+                  break
+                fi
+                sleep 1
               done
-              echo "Docker daemon is ready!"
 
               if [ ! -f /data/.runner ]; then
                 echo "Registering runner with Forgejo at ${FORGEJO_INSTANCE_URL}..."
@@ -68,7 +73,7 @@ spec:
               exec forgejo-runner daemon --config /etc/forgejo-runner/config.yaml
           env:
             - name: DOCKER_HOST
-              value: "unix:///var/run/docker.sock"
+              value: "tcp://127.0.0.1:2375"
             - name: FORGEJO_INSTANCE_URL
               value: "http://forgejo-http.forgejo.svc.cluster.local:3000"
             - name: RUNNER_NAME
@@ -79,16 +84,12 @@ spec:
                   name: forgejo-runner-secret
                   key: token
           volumeMounts:
-            - name: docker-socket
-              mountPath: /var/run
             - name: runner-data
               mountPath: /data
             - name: runner-config
               mountPath: /etc/forgejo-runner/config.yaml
               subPath: config.yaml
       volumes:
-        - name: docker-socket
-          emptyDir: {}
         - name: runner-config
           configMap:
             name: forgejo-runner-config

@@ -142,7 +142,7 @@ data:
     container:
       network: "host"
       privileged: true
-      docker_host: "tcp://localhost:2375"
+      docker_host: "tcp://127.0.0.1:2375"
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -184,11 +184,16 @@ spec:
             - /bin/sh
             - -c
             - |
-              echo "Checking Docker daemon on http://localhost:2375..."
-              while ! wget -q -O - http://localhost:2375/version >/dev/null 2>&1; do
+              echo "Waiting for Docker daemon on 127.0.0.1:2375..."
+              for i in $(seq 1 30); do
+                if wget -q -O - http://127.0.0.1:2375/_ping >/dev/null 2>&1 || \
+                   wget -q -O - http://localhost:2375/_ping >/dev/null 2>&1 || \
+                   nc -z 127.0.0.1 2375 2>/dev/null; then
+                  echo "Docker daemon verified ready on TCP port 2375!"
+                  break
+                fi
                 sleep 1
               done
-              echo "Docker daemon verified ready on TCP port 2375!"
 
               if [ ! -f /data/.runner ]; then
                 echo "Registering runner with Forgejo at ${FORGEJO_INSTANCE_URL}..."
@@ -212,7 +217,7 @@ spec:
               exec forgejo-runner daemon --config /etc/forgejo-runner/config.yaml
           env:
             - name: DOCKER_HOST
-              value: "tcp://localhost:2375"
+              value: "tcp://127.0.0.1:2375"
             - name: FORGEJO_INSTANCE_URL
               value: "http://forgejo-http.forgejo.svc.cluster.local:3000"
             - name: RUNNER_NAME
@@ -255,27 +260,39 @@ log_step "Purging stale registration state and restarting runner pod..."
 kubectl exec -n forgejo-runner statefulset/forgejo-runner -c runner -- rm -f /data/.runner 2>/dev/null || true
 kubectl delete pod forgejo-runner-0 -n forgejo-runner --grace-period=0 --force >/dev/null 2>&1 || true
 
-log_info "Waiting for new runner pod to initialize and register..."
+log_info "Waiting for new runner pod to initialize..."
 kubectl rollout status statefulset/forgejo-runner -n forgejo-runner --timeout=60s
 
-log_step "Verifying Runner registration logs..."
-sleep 4
-LOGS=$(kubectl logs -n forgejo-runner statefulset/forgejo-runner -c runner --tail=30 2>/dev/null || true)
+log_step "Waiting for Runner to complete registration and start daemon..."
+REG_SUCCESS=false
+for i in $(seq 1 25); do
+    LOGS=$(kubectl logs -n forgejo-runner statefulset/forgejo-runner -c runner --tail=30 2>/dev/null || true)
+    if echo "$LOGS" | grep -qi -E "(Runner successfully registered|Starting forgejo-runner daemon|daemon is running)"; then
+        REG_SUCCESS=true
+        break
+    fi
+    echo -n "."
+    sleep 2
+done
+echo ""
 
-if echo "$LOGS" | grep -qi -E "(Runner successfully registered|Starting forgejo-runner daemon|daemon is running)"; then
+if [ "$REG_SUCCESS" = true ]; then
     echo ""
     echo -e "${GREEN}${BOLD}==============================================================================${NC}"
     echo -e "${GREEN}${BOLD}       ✔ FORGEJO ACTIONS RUNNER SUCCESSFULLY REGISTERED & ONLINE!${NC}"
     echo -e "${GREEN}${BOLD}==============================================================================${NC}"
     echo -e " Runner Name:       ${BOLD}${RUNNER_NAME}${NC}"
     echo -e " Target Namespace:  forgejo-runner"
-    echo -e " Docker Transport:  tcp://localhost:2375"
+    echo -e " Docker Transport:  tcp://127.0.0.1:2375"
     echo -e " Registered At:     http://forgejo-http.forgejo.svc.cluster.local:3000"
     echo ""
     echo -e " Verify in your browser:"
     echo -e " 👉 Admin Panel:    https://git.<domain>/admin/actions/runners"
     echo -e "${GREEN}${BOLD}==============================================================================${NC}\n"
 else
-    log_warn "Registration log confirmation:"
+    log_warn "Current runner container logs:"
     echo "$LOGS"
+    echo ""
+    log_warn "Current dind container logs:"
+    kubectl logs -n forgejo-runner statefulset/forgejo-runner -c dind --tail=20 2>/dev/null || true
 fi
