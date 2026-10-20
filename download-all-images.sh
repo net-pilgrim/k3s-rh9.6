@@ -131,7 +131,7 @@ done
 
 if [ -n "${PYTHON_BIN}" ]; then
     log_info "Executing Python TLS 1.2 download engine (${PYTHON_BIN})..."
-    "${PYTHON_BIN}" - "${OUTPUT_DIR}" "${FILTER_ARG}" << 'PYEOF'
+    "${PYTHON_BIN}" - "${OUTPUT_DIR}" ${FILTER_ARG} << 'PYEOF'
 #!/usr/bin/env python3
 """
 High-Performance OCI/Docker Container Image Downloader with Strict TLS 1.2
@@ -198,7 +198,6 @@ IMAGES = [
     "docker.io/pgsty/mc:RELEASE.2026-09-16T00-00-00Z",
     "redis:7-alpine",
     "rabbitmq:3-management-alpine",
-    "minio/minio:RELEASE.2023-09-07T02-17-04Z"
 ]
 
 def get_tag_aliases(image_name):
@@ -382,15 +381,17 @@ def download_image(image_name, out_tar):
         shutil.rmtree(work_dir, ignore_errors=True)
 
 def main():
-    target_dir = "./workload-images"
+    target_dir = sys.argv[1] if (len(sys.argv) > 1 and sys.argv[1].strip() and not sys.argv[1].startswith("-")) else "./workload-images"
     filter_pattern = os.environ.get("IMAGE_FILTER", "")
 
     for arg in sys.argv[1:]:
+        if not arg or not arg.strip():
+            continue
         if arg in ("--plane-only", "-p"):
             filter_pattern = "plane"
         elif arg.startswith("--filter="):
             filter_pattern = arg.split("=", 1)[1]
-        elif not arg.startswith("-"):
+        elif not arg.startswith("-") and arg != target_dir:
             target_dir = arg
 
     os.makedirs(target_dir, exist_ok=True)
