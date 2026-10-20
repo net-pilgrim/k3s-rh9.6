@@ -18,10 +18,10 @@
 #   sudo ./download-all-images.sh --import       # Downloads AND imports into local k3s
 #   ./download-all-images.sh --archive           # Downloads and builds workload-images.tar.gz
 # ==============================================================================
-set -euo pipefail
+set -eo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "${PWD}")"
+[ -d "${SCRIPT_DIR}" ] && cd "${SCRIPT_DIR}" || cd "${PWD}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

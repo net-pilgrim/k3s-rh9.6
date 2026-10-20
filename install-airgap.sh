@@ -3,10 +3,10 @@
 # 100% Offline / Air-Gapped Installer for RHEL 9.6 / Rocky / Ubuntu
 # Requires NO internet access. Uses pre-bundled binaries, RPMs, and images.
 # ==============================================================================
-set -euo pipefail
+set -eo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "${PWD}")"
+[ -d "${SCRIPT_DIR}" ] && cd "${SCRIPT_DIR}" || cd "${PWD}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
