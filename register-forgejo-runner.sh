@@ -110,7 +110,7 @@ kubectl create secret generic forgejo-runner-secret \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 log_success "Secret 'forgejo-runner-secret' updated successfully."
 
-log_step "Recreating StatefulSet definition (bypassing Kubernetes immutability lock)..."
+log_step "Recreating StatefulSet definition (clearing immutability lock)..."
 kubectl delete statefulset forgejo-runner -n forgejo-runner --cascade=orphan --ignore-not-found=true >/dev/null 2>&1 || true
 
 log_step "Applying TCP-based Docker configuration & updated runner manifest..."
@@ -232,6 +232,23 @@ spec:
         - name: runner-config
           configMap:
             name: forgejo-runner-config
+  volumeClaimTemplates:
+    - metadata:
+        name: runner-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "local-path"
+        resources:
+          requests:
+            storage: 5Gi
+    - metadata:
+        name: dind-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "local-path"
+        resources:
+          requests:
+            storage: 20Gi
 EOF
 
 log_step "Purging stale registration state and restarting runner pod..."
