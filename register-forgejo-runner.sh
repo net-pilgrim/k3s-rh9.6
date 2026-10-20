@@ -2,7 +2,7 @@
 # ==============================================================================
 # Forgejo Actions Runner Registration & Health Engine
 # Automatically extracts instance token from Forgejo, configures the runner secret,
-# and bootstraps the DinD (Docker-in-Docker) runner into Forgejo Actions.
+# configures Docker-in-Docker via localhost TCP (2375), and bootstraps the runner.
 #
 # Usage:
 #   sudo ./register-forgejo-runner.sh
@@ -110,19 +110,138 @@ kubectl create secret generic forgejo-runner-secret \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 log_success "Secret 'forgejo-runner-secret' updated successfully."
 
-log_step "Patching runner StatefulSet (runAsUser: 0 and daemon check)..."
-kubectl patch statefulset forgejo-runner -n forgejo-runner --type merge -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"runner\",\"securityContext\":{\"runAsUser\":0},\"command\":[\"/bin/sh\",\"-c\",\"echo Waiting for Docker daemon to become responsive...; for i in \\$(seq 1 30); do if [ -S /var/run/docker.sock ] || nc -z localhost 2375 2>/dev/null; then echo Docker daemon is ready!; break; fi; sleep 1; done; if [ ! -f /data/.runner ]; then echo Registering runner with Forgejo at \\${FORGEJO_INSTANCE_URL}...; forgejo-runner register --no-interactive --instance \\\"\\${FORGEJO_INSTANCE_URL}\\\" --token \\\"\\${RUNNER_TOKEN}\\\" --name \\\"\\${RUNNER_NAME}\\\" --labels \\\"ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm,docker:docker://docker:27-cli\\\"; echo Runner successfully registered!; else echo Found existing runner registration in /data/.runner; fi; echo Starting forgejo-runner daemon...; exec forgejo-runner daemon --config /etc/forgejo-runner/config.yaml\"]}]}}}}" >/dev/null 2>&1 || true
+log_step "Applying TCP-based Docker configuration & updated runner manifest..."
+cat << 'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forgejo-runner-config
+  namespace: forgejo-runner
+data:
+  config.yaml: |
+    log:
+      level: info
+    runner:
+      file: /data/.runner
+      capacity: 2
+      timeout: 3h
+      insecure: false
+      fetch_timeout: 5s
+      fetch_interval: 2s
+      labels:
+        - "ubuntu-latest:docker://node:20-bookworm"
+        - "ubuntu-22.04:docker://node:20-bookworm"
+        - "ubuntu-20.04:docker://node:20-bookworm"
+        - "docker:docker://docker:27-cli"
+    cache:
+      enabled: true
+      dir: /data/cache
+    container:
+      network: "host"
+      privileged: true
+      docker_host: "tcp://localhost:2375"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: forgejo-runner
+  namespace: forgejo-runner
+  labels:
+    app: forgejo-runner
+spec:
+  replicas: 1
+  serviceName: forgejo-runner
+  selector:
+    matchLabels:
+      app: forgejo-runner
+  template:
+    metadata:
+      labels:
+        app: forgejo-runner
+    spec:
+      containers:
+        - name: dind
+          image: docker:27-dind
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          volumeMounts:
+            - name: dind-storage
+              mountPath: /var/lib/docker
+
+        - name: runner
+          image: code.forgejo.org/forgejo/runner:4.0.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Checking Docker daemon on http://localhost:2375..."
+              while ! wget -q -O - http://localhost:2375/version >/dev/null 2>&1; do
+                sleep 1
+              done
+              echo "Docker daemon verified ready on TCP port 2375!"
+
+              if [ ! -f /data/.runner ]; then
+                echo "Registering runner with Forgejo at ${FORGEJO_INSTANCE_URL}..."
+                if [ -z "${RUNNER_TOKEN}" ]; then
+                  echo "ERROR: RUNNER_TOKEN is empty! Please register the runner or populate the secret."
+                  sleep 30
+                  exit 1
+                fi
+                forgejo-runner register \
+                  --no-interactive \
+                  --instance "${FORGEJO_INSTANCE_URL}" \
+                  --token "${RUNNER_TOKEN}" \
+                  --name "${RUNNER_NAME}" \
+                  --labels "ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm,docker:docker://docker:27-cli"
+                echo "Runner successfully registered!"
+              else
+                echo "Found existing runner registration in /data/.runner"
+              fi
+
+              echo "Starting forgejo-runner daemon..."
+              exec forgejo-runner daemon --config /etc/forgejo-runner/config.yaml
+          env:
+            - name: DOCKER_HOST
+              value: "tcp://localhost:2375"
+            - name: FORGEJO_INSTANCE_URL
+              value: "http://forgejo-http.forgejo.svc.cluster.local:3000"
+            - name: RUNNER_NAME
+              value: "k3s-dind-runner"
+            - name: RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: forgejo-runner-secret
+                  key: token
+          volumeMounts:
+            - name: runner-data
+              mountPath: /data
+            - name: runner-config
+              mountPath: /etc/forgejo-runner/config.yaml
+              subPath: config.yaml
+      volumes:
+        - name: runner-config
+          configMap:
+            name: forgejo-runner-config
+EOF
 
 log_step "Purging stale registration state in runner pod..."
 kubectl exec -n forgejo-runner statefulset/forgejo-runner -c runner -- rm -f /data/.runner 2>/dev/null || true
 
-log_step "Restarting Forgejo Runner StatefulSet..."
-kubectl rollout restart statefulset/forgejo-runner -n forgejo-runner >/dev/null
-log_info "Waiting for runner pod rollout to complete..."
+log_step "Recreating runner pod to apply new specification..."
+kubectl delete pod forgejo-runner-0 -n forgejo-runner --grace-period=0 --force >/dev/null 2>&1 || true
+
+log_info "Waiting for runner pod to initialize and register..."
 kubectl rollout status statefulset/forgejo-runner -n forgejo-runner --timeout=60s
 
 log_step "Verifying Runner registration logs..."
-sleep 5
+sleep 4
 LOGS=$(kubectl logs -n forgejo-runner statefulset/forgejo-runner -c runner --tail=30 2>/dev/null || true)
 
 if echo "$LOGS" | grep -qi -E "(Runner successfully registered|Starting forgejo-runner daemon|daemon is running)"; then
@@ -132,6 +251,7 @@ if echo "$LOGS" | grep -qi -E "(Runner successfully registered|Starting forgejo-
     echo -e "${GREEN}${BOLD}==============================================================================${NC}"
     echo -e " Runner Name:       ${BOLD}${RUNNER_NAME}${NC}"
     echo -e " Target Namespace:  forgejo-runner"
+    echo -e " Docker Transport:  tcp://localhost:2375"
     echo -e " Registered At:     http://forgejo-http.forgejo.svc.cluster.local:3000"
     echo ""
     echo -e " Verify in your browser:"
