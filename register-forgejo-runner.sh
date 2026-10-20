@@ -110,6 +110,9 @@ kubectl create secret generic forgejo-runner-secret \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 log_success "Secret 'forgejo-runner-secret' updated successfully."
 
+log_step "Recreating StatefulSet definition (bypassing Kubernetes immutability lock)..."
+kubectl delete statefulset forgejo-runner -n forgejo-runner --cascade=orphan --ignore-not-found=true >/dev/null 2>&1 || true
+
 log_step "Applying TCP-based Docker configuration & updated runner manifest..."
 cat << 'EOF' | kubectl apply -f -
 apiVersion: v1
@@ -231,13 +234,11 @@ spec:
             name: forgejo-runner-config
 EOF
 
-log_step "Purging stale registration state in runner pod..."
+log_step "Purging stale registration state and restarting runner pod..."
 kubectl exec -n forgejo-runner statefulset/forgejo-runner -c runner -- rm -f /data/.runner 2>/dev/null || true
-
-log_step "Recreating runner pod to apply new specification..."
 kubectl delete pod forgejo-runner-0 -n forgejo-runner --grace-period=0 --force >/dev/null 2>&1 || true
 
-log_info "Waiting for runner pod to initialize and register..."
+log_info "Waiting for new runner pod to initialize and register..."
 kubectl rollout status statefulset/forgejo-runner -n forgejo-runner --timeout=60s
 
 log_step "Verifying Runner registration logs..."
