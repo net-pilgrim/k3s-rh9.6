@@ -147,8 +147,14 @@ fi
 if [[ "${TARGET_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     log_info "Target Ingress Host IP: ${TARGET_IP} (Interface: ${IFACE:-eth0})"
     if [ -z "${DOMAIN}" ]; then
-        DOMAIN="${TARGET_IP}.nip.io"
-        log_info "Base domain configured to: ${DOMAIN}"
+        EXISTING_DOMAIN=$(kubectl get ingress forgejo -n forgejo -o jsonpath='{.spec.rules[0].host}' 2>/dev/null | sed 's/^git\.//' || true)
+        if [ -n "$EXISTING_DOMAIN" ]; then
+            DOMAIN="$EXISTING_DOMAIN"
+            log_info "Reusing existing cluster domain: ${DOMAIN}"
+        else
+            DOMAIN="${TARGET_IP}.nip.io"
+            log_info "Base domain configured to: ${DOMAIN}"
+        fi
     fi
 
     # Explicitly patch Traefik Service so all Ingresses show and route to this IP
@@ -174,9 +180,16 @@ else
     fi
 fi
 
+# Reuse existing secrets if present in the cluster (preserves idempotency on re-runs)
 if [ -z "${ADMIN_PASS}" ]; then
-    ADMIN_PASS=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
-    ADMIN_PASS="${ADMIN_PASS}A1!"
+    EXISTING_PASS=$(kubectl get secret itsaplan-secrets -n itsaplan -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    if [ -n "$EXISTING_PASS" ]; then
+        ADMIN_PASS="$EXISTING_PASS"
+        log_info "Reusing existing master password from cluster."
+    else
+        ADMIN_PASS=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 16)
+        ADMIN_PASS="${ADMIN_PASS}A1!"
+    fi
 fi
 
 CERT_ISSUER="selfsigned-issuer"
@@ -185,9 +198,26 @@ if [ "${TLS_MODE}" = "letsencrypt" ]; then
     ACME_EMAIL="${ACME_EMAIL:-admin@${DOMAIN}}"
 fi
 
-BETTER_AUTH_SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-APP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-PLANE_SECRET_KEY="plane-secret-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+EXISTING_AUTH_SECRET=$(kubectl get secret itsaplan-secrets -n itsaplan -o jsonpath='{.data.BETTER_AUTH_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [ -n "$EXISTING_AUTH_SECRET" ]; then
+    BETTER_AUTH_SECRET="$EXISTING_AUTH_SECRET"
+else
+    BETTER_AUTH_SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+fi
+
+EXISTING_ENC_KEY=$(kubectl get secret itsaplan-secrets -n itsaplan -o jsonpath='{.data.APP_ENCRYPTION_KEY}' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [ -n "$EXISTING_ENC_KEY" ]; then
+    APP_ENCRYPTION_KEY="$EXISTING_ENC_KEY"
+else
+    APP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+fi
+
+EXISTING_PLANE_SECRET=$(kubectl get secret plane-secrets -n plane -o jsonpath='{.data.SECRET_KEY}' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [ -n "$EXISTING_PLANE_SECRET" ]; then
+    PLANE_SECRET_KEY="$EXISTING_PLANE_SECRET"
+else
+    PLANE_SECRET_KEY="plane-secret-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
 
 log_info "Domain:        ${DOMAIN}"
 log_info "TLS Issuer:    ${CERT_ISSUER}"
