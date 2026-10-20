@@ -121,6 +121,20 @@ if [ -f /etc/rancher/k3s/config.yaml ]; then
         echo " -> Disabling 'selinux: true' in /etc/rancher/k3s/config.yaml..."
         sed -i '/selinux: true/d' /etc/rancher/k3s/config.yaml
     fi
+
+    # Fix C2: Ensure eth0 IP is bound as node-ip & flannel-iface
+    ETH0_IP=$(ip -4 addr show dev eth0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n 1 || true)
+    if [ -n "${ETH0_IP}" ]; then
+        if ! grep -q "node-ip: \"${ETH0_IP}\"" /etc/rancher/k3s/config.yaml; then
+            echo " -> Binding k3s to eth0 IP (${ETH0_IP}) in /etc/rancher/k3s/config.yaml..."
+            sed -i '/node-ip:/d;/node-external-ip:/d;/flannel-iface:/d' /etc/rancher/k3s/config.yaml
+            cat << EOF >> /etc/rancher/k3s/config.yaml
+node-ip: "${ETH0_IP}"
+node-external-ip: "${ETH0_IP}"
+flannel-iface: "eth0"
+EOF
+        fi
+    fi
 fi
 
 # Fix D: Ensure k3s binary is valid in /usr/local/bin and /usr/bin

@@ -37,6 +37,8 @@ log_warn() { echo -e "${YELLOW}   ⚠ ${NC}$1"; }
 log_error() { echo -e "${RED}   ✖ ERROR: ${NC}$1" >&2; }
 
 DOMAIN="${DOMAIN:-}"
+TARGET_IP="${TARGET_IP:-${IP:-}}"
+IFACE="${IFACE:-eth0}"
 ADMIN_PASS="${ADMIN_PASS:-${ADMIN_PASSWORD:-}}"
 TLS_MODE="${TLS_MODE:-${TLS:-}}"
 ACME_EMAIL="${ACME_EMAIL:-${EMAIL:-}}"
@@ -45,6 +47,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -d|--domain)
             DOMAIN="$2"; shift 2 ;;
+        -i|--ip)
+            TARGET_IP="$2"; shift 2 ;;
+        --iface)
+            IFACE="$2"; shift 2 ;;
         -p|--admin-pass|--admin-password)
             ADMIN_PASS="$2"; shift 2 ;;
         -t|--tls)
@@ -57,6 +63,8 @@ Usage: ./deploy-workloads.sh [OPTIONS]
 
 Options:
   -d, --domain <DOMAIN>       Base domain name (default: auto-detected <IP>.nip.io)
+  -i, --ip <IP>               Host IP address for Ingress (default: auto-detect eth0)
+  --iface <IFACE>             Network interface to extract IP from (default: eth0)
   -p, --admin-pass <PASSWORD> Master administrator password (default: random secure string)
   -t, --tls <MODE>            TLS mode: 'selfsigned', 'letsencrypt' (default: auto)
   -e, --email <EMAIL>         ACME email for Let's Encrypt
@@ -117,17 +125,52 @@ fi
 NODE_NAME=$(kubectl get nodes --no-headers | awk '{print $1}' | head -n 1)
 log_success "Kubernetes cluster is reachable (Node: ${NODE_NAME})"
 
-# Auto-detect IP and Domain
-if [ -z "${DOMAIN}" ]; then
-    PUBLIC_IP=$(curl -s --tlsv1.2 --tls-max 1.2 --connect-timeout 3 https://ifconfig.me 2>/dev/null || \
-                curl -s --tlsv1.2 --tls-max 1.2 --connect-timeout 3 https://api.ipify.org 2>/dev/null || \
-                ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | tr -d ' \n' || echo "")
-    if [[ "${PUBLIC_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        DOMAIN="${PUBLIC_IP}.nip.io"
-        log_info "Auto-detected public IP: ${PUBLIC_IP} -> Base domain: ${DOMAIN}"
-    else
+# Auto-detect Host IP (prioritizing eth0) and Domain
+if [ -z "${TARGET_IP}" ]; then
+    # 1. Check specified interface
+    if [ -n "${IFACE}" ]; then
+        TARGET_IP=$(ip -4 addr show dev "${IFACE}" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n 1 || true)
+    fi
+    # 2. Check eth0 explicitly
+    if [ -z "${TARGET_IP}" ]; then
+        TARGET_IP=$(ip -4 addr show dev eth0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n 1 || true)
+    fi
+    # 3. Fallback to route or public queries
+    if [ -z "${TARGET_IP}" ]; then
+        TARGET_IP=$(curl -s --tlsv1.2 --tls-max 1.2 --connect-timeout 3 https://ifconfig.me 2>/dev/null || \
+                    curl -s --tlsv1.2 --tls-max 1.2 --connect-timeout 3 https://api.ipify.org 2>/dev/null || \
+                    ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | tr -d ' \n' || \
+                    hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+    fi
+fi
+
+if [[ "${TARGET_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    log_info "Target Ingress Host IP: ${TARGET_IP} (Interface: ${IFACE:-eth0})"
+    if [ -z "${DOMAIN}" ]; then
+        DOMAIN="${TARGET_IP}.nip.io"
+        log_info "Base domain configured to: ${DOMAIN}"
+    fi
+
+    # Explicitly patch Traefik Service so all Ingresses show and route to this IP
+    log_info "Configuring Traefik Ingress Controller to advertise IP ${TARGET_IP}..."
+    kubectl patch svc traefik -n kube-system --type merge -p "{\"spec\":{\"externalIPs\":[\"${TARGET_IP}\"]}}" 2>/dev/null || true
+
+    # Persist node-ip and flannel-iface to /etc/rancher/k3s/config.yaml if writable
+    if [ -f /etc/rancher/k3s/config.yaml ] && [ -w /etc/rancher/k3s/config.yaml ]; then
+        if ! grep -q "node-ip: \"${TARGET_IP}\"" /etc/rancher/k3s/config.yaml; then
+            sed -i '/node-ip:/d;/node-external-ip:/d;/flannel-iface:/d' /etc/rancher/k3s/config.yaml 2>/dev/null || true
+            cat << EOF >> /etc/rancher/k3s/config.yaml
+node-ip: "${TARGET_IP}"
+node-external-ip: "${TARGET_IP}"
+flannel-iface: "${IFACE:-eth0}"
+EOF
+            log_info "Saved node-ip: ${TARGET_IP} and flannel-iface: ${IFACE:-eth0} to /etc/rancher/k3s/config.yaml"
+        fi
+    fi
+else
+    if [ -z "${DOMAIN}" ]; then
         DOMAIN="127.0.0.1.nip.io"
-        log_warn "Could not determine public IP, defaulting domain to: ${DOMAIN}"
+        log_warn "Could not determine host IP, defaulting domain to: ${DOMAIN}"
     fi
 fi
 

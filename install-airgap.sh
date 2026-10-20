@@ -51,13 +51,14 @@ done
 DOMAIN="${DOMAIN:-}"
 ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 16)!A1}"
 
-# Detect Host IP
-PUBLIC_IP=$(hostname -I | awk '{print $1}')
+# Detect Host IP (prioritize eth0)
+ETH0_IP=$(ip -4 addr show dev eth0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n 1 || true)
+PUBLIC_IP="${ETH0_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 if [ -z "${DOMAIN}" ]; then
     DOMAIN="${PUBLIC_IP}.nip.io"
 fi
-log_info "Cluster Host IP: ${PUBLIC_IP}"
-log_info "Base Domain:    ${DOMAIN}"
+log_info "Cluster Host IP (eth0): ${PUBLIC_IP}"
+log_info "Base Domain:            ${DOMAIN}"
 
 # 1. Clean any broken yum repos that cause metadata download errors
 log_step "[1/8] Cleaning stale or unreachable external package repositories..."
@@ -179,6 +180,9 @@ mkdir -p /etc/rancher/k3s
 
 cat << EOF > /etc/rancher/k3s/config.yaml
 write-kubeconfig-mode: "0644"
+node-ip: "${PUBLIC_IP}"
+node-external-ip: "${PUBLIC_IP}"
+flannel-iface: "eth0"
 tls-san:
   - "${PUBLIC_IP}"
   - "${DOMAIN}"
