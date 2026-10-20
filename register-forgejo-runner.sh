@@ -110,6 +110,9 @@ kubectl create secret generic forgejo-runner-secret \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 log_success "Secret 'forgejo-runner-secret' updated successfully."
 
+log_step "Patching runner StatefulSet (runAsUser: 0 and daemon check)..."
+kubectl patch statefulset forgejo-runner -n forgejo-runner --type merge -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"runner\",\"securityContext\":{\"runAsUser\":0},\"command\":[\"/bin/sh\",\"-c\",\"echo Waiting for Docker daemon to become responsive...; for i in \\$(seq 1 30); do if [ -S /var/run/docker.sock ] || nc -z localhost 2375 2>/dev/null; then echo Docker daemon is ready!; break; fi; sleep 1; done; if [ ! -f /data/.runner ]; then echo Registering runner with Forgejo at \\${FORGEJO_INSTANCE_URL}...; forgejo-runner register --no-interactive --instance \\\"\\${FORGEJO_INSTANCE_URL}\\\" --token \\\"\\${RUNNER_TOKEN}\\\" --name \\\"\\${RUNNER_NAME}\\\" --labels \\\"ubuntu-latest:docker://node:20-bookworm,ubuntu-22.04:docker://node:20-bookworm,docker:docker://docker:27-cli\\\"; echo Runner successfully registered!; else echo Found existing runner registration in /data/.runner; fi; echo Starting forgejo-runner daemon...; exec forgejo-runner daemon --config /etc/forgejo-runner/config.yaml\"]}]}}}}" >/dev/null 2>&1 || true
+
 log_step "Purging stale registration state in runner pod..."
 kubectl exec -n forgejo-runner statefulset/forgejo-runner -c runner -- rm -f /data/.runner 2>/dev/null || true
 
