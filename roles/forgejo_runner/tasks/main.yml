@@ -63,7 +63,9 @@
     mode: "0644"
 
 - name: Apply runner StatefulSet
-  ansible.builtin.command: /usr/local/bin/kubectl apply -f /tmp/runner-statefulset.yaml
+  ansible.builtin.shell: |
+    /usr/local/bin/kubectl delete statefulset forgejo-runner -n {{ forgejo_runner_namespace }} --cascade=orphan --ignore-not-found=true
+    /usr/local/bin/kubectl apply -f /tmp/runner-statefulset.yaml
   changed_when: true
 
 - name: Wait for Forgejo runner pod to start
